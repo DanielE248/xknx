@@ -5,12 +5,10 @@ A binary sensor can be:
 * A switch in the wall (as in the thing you press to switch on the light)
 * A motion detector
 * A reed sensor for detecting of a window/door is opened or closed.
-
-A BinarySensor may also have Actions attached which are executed after state was changed.
 """
+
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
 from functools import partial
 import time
@@ -18,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 from xknx.core import Task
 from xknx.remote_value import GroupAddressesType, RemoteValueSwitch
+from xknx.telegram.apci import GroupValueWrite
 
 from .device import Device, DeviceCallbackType
 
@@ -40,22 +39,35 @@ class BinarySensor(Device):
         reset_after: float | None = None,
         context_timeout: float | None = None,
         device_updated_cb: DeviceCallbackType[BinarySensor] | None = None,
-    ):
+        always_callback: bool = False,
+    ) -> None:
         """Initialize BinarySensor class."""
         super().__init__(xknx, name, device_updated_cb)
 
         self.ignore_internal_state = ignore_internal_state or bool(context_timeout)
-        self.reset_after = reset_after
+        self.always_callback = always_callback
         self.state: bool | None = None
 
         self._context_timeout = context_timeout
         self._count_set_on = 0
         self._count_set_off = 0
         self._last_set: float | None = None
-        self._reset_task_name = f"binary_sensor.reset_{id(self)}"
-        self._context_task_name = f"binary_sensor.context_{id(self)}"
-        self._reset_task: Task | None = None
-        self._context_task: Task | None = None
+        if reset_after is not None:
+            self._reset_task: Task | None = Task(
+                name=f"binary_sensor.reset_{id(self)}",
+                target=partial(self._set_internal_state, False),
+                wait_before_start=reset_after,
+            )
+        else:
+            self._reset_task = None
+        if context_timeout:
+            self._context_task: Task | None = Task(
+                name=f"binary_sensor.context_{id(self)}",
+                target=partial(self._counter_task, context_timeout),
+                wait_before_start=context_timeout,
+            )
+        else:
+            self._context_task = None
 
         self.remote_value = RemoteValueSwitch(
             xknx,
@@ -64,50 +76,49 @@ class BinarySensor(Device):
             sync_state=sync_state,
             device_name=self.name,
             # after_update called internally
-            after_update_cb=self._state_from_remote_value,
+            after_update_cb=self._set_internal_state,
         )
 
     def _iter_remote_values(self) -> Iterator[RemoteValueSwitch]:
         """Iterate the devices RemoteValue classes."""
         yield self.remote_value
 
-    def _iter_tasks(self) -> Iterator[Task | None]:
-        """Iterate the device tasks."""
-        yield self._context_task
-        yield self._reset_task
+    def async_remove_tasks(self) -> None:
+        """Remove async tasks of device."""
+        if self._context_task:
+            self.xknx.task_registry.remove_task(self._context_task)
+        if self._reset_task:
+            self.xknx.task_registry.remove_task(self._reset_task)
 
     @property
     def last_telegram(self) -> Telegram | None:
         """Return the last telegram received from the RemoteValue."""
         return self.remote_value.telegram
 
-    async def _state_from_remote_value(self) -> None:
-        """Update the internal state from RemoteValue (Callback)."""
-        if self.remote_value.value is not None:
-            await self._set_internal_state(self.remote_value.value)
-
-    async def _set_internal_state(self, state: bool) -> None:
-        """Set the internal state of the device. If state was changed after_update hooks and connected Actions are executed."""
-        if state != self.state or self.ignore_internal_state:
+    def _set_internal_state(self, state: bool) -> None:
+        """Set the internal state of the device and schedule callbacks."""
+        if state != self.state or (
+            self.ignore_internal_state
+            and self.remote_value.telegram is not None
+            and isinstance(self.remote_value.telegram.payload, GroupValueWrite)
+        ):
             self.state = state
 
-            if self.ignore_internal_state and self._context_timeout:
+            if self.ignore_internal_state and self._context_task:
                 self.bump_and_get_counter(state)
-                self._context_task = self.xknx.task_registry.register(
-                    name=self._context_task_name,
-                    async_func=partial(self._counter_task, self._context_timeout),
-                ).start()
+                self.xknx.task_registry.start_task(self._context_task)
             else:
-                await self.after_update()
+                self.after_update()
+        elif self.always_callback:
+            self.after_update()
 
     async def _counter_task(self, wait_seconds: float) -> None:
-        """Trigger after 1 second to prevent double triggers."""
-        await asyncio.sleep(wait_seconds)
-        await self.after_update()
+        """Trigger when context window has passed once with counter values and once reset."""
+        self.after_update()
 
         self._count_set_on = 0
         self._count_set_off = 0
-        await self.after_update()
+        self.after_update()
 
     @property
     def counter(self) -> int | None:
@@ -117,7 +128,7 @@ class BinarySensor(Device):
         return None
 
     def bump_and_get_counter(self, state: bool) -> int:
-        """Bump counter and return the number of times a state was set to the same value within CONTEXT_TIMEOUT."""
+        """Bump counter and return the number of times a state was set to the same value within context_timeout."""
 
         def within_same_context() -> bool:
             """Check if state change was within same context (e.g. 'Button was pressed twice')."""
@@ -144,28 +155,20 @@ class BinarySensor(Device):
             self._count_set_off = 1
         return 1
 
-    async def process_group_write(self, telegram: "Telegram") -> None:
-        """Process incoming and outgoing GROUP WRITE telegram."""
-        if await self.remote_value.process(telegram, always_callback=True):
+    def process_group_write(self, telegram: Telegram) -> None:
+        """Process incoming and outgoing GroupValueWrite telegram."""
+        if self.remote_value.process(telegram, always_callback=True):
             self._process_reset_after()
 
-    async def process_group_response(self, telegram: "Telegram") -> None:
+    def process_group_response(self, telegram: Telegram) -> None:
         """Process incoming GroupValueResponse telegrams."""
-        if await self.remote_value.process(telegram, always_callback=False):
+        if self.remote_value.process(telegram, always_callback=self.always_callback):
             self._process_reset_after()
 
     def _process_reset_after(self) -> None:
         """Create Task for resetting state if 'reset_after' is configured."""
-        if self.reset_after is not None and self.state:
-            self._reset_task = self.xknx.task_registry.register(
-                name=self._reset_task_name,
-                async_func=partial(self._reset_state, self.reset_after),
-                track_task=True,
-            ).start()
-
-    async def _reset_state(self, wait_seconds: float) -> None:
-        await asyncio.sleep(wait_seconds)
-        await self._set_internal_state(False)
+        if self._reset_task is not None and self.state:
+            self.xknx.task_registry.start_task(self._reset_task)
 
     def is_on(self) -> bool:
         """Return if binary sensor is 'on'."""

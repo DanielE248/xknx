@@ -1,8 +1,12 @@
 """Manages a connection to the KNX bus."""
+
 from __future__ import annotations
 
 from enum import Enum, auto
+import os
+from typing import Any
 
+from xknx.secure import Keyring
 from xknx.telegram.address import IndividualAddress, IndividualAddressableType
 
 from .const import DEFAULT_MCAST_GRP, DEFAULT_MCAST_PORT
@@ -31,18 +35,20 @@ class ConnectionConfig:
         * TUNNELING connect to a specific KNX/IP tunneling device via UDP.
         * TUNNELING_TCP connect to a specific KNX/IP tunneling v2 device via TCP.
     * individual address:
+        * AUTOMATIC use a specific tunnel endpoint from a given knxkeys file
         * ROUTING the individual address used as source address for routing
+        * TCP TUNNELING request a specific tunnel endpoint
         * SECURE TUNNELING use a specific tunnel endpoint from the knxkeys file
-    * local_ip: Local ip of the interface though which KNXIPInterface should connect.
-    * gateway_ip: IP of KNX/IP tunneling device.
+    * local_ip: Local ip or interface name though which xknx should connect.
+    * gateway_ip: IP or hostname of KNX/IP tunneling device.
     * gateway_port: Port of KNX/IP tunneling device.
     * route_back: For UDP TUNNELING connection.
         The KNXnet/IP Server shall use the IP address and port in the received IP package
         as the target IP address or port number for the response to the KNXnet/IP Client.
     * multicast_group: Multicast group for KNXnet/IP routing.
     * multicast_port: Multicast port for KNXnet/IP routing.
-    * auto_reconnect: Auto reconnect to KNX/IP tunneling device if connection cannot be established.
-    * auto_reconnect_wait: Wait n seconds before trying to reconnect to KNX/IP tunneling device.
+    * auto_reconnect: Auto reconnect to KNX/IP tunneling device if open connection was lost.
+    * auto_reconnect_wait: Delay in seconds before attempting subsequent reconnects after an initial reconnect attempt fails.
     * scan_filter: For AUTOMATIC connection, limit scan with the given filter
     * threaded: Run connection logic in separate thread to avoid concurrency issues in HA
     * secure_config: KNX Secure config to use
@@ -65,7 +71,7 @@ class ConnectionConfig:
         scan_filter: GatewayScanFilter | None = None,
         threaded: bool = False,
         secure_config: SecureConfig | None = None,
-    ):
+    ) -> None:
         """Initialize ConnectionConfig class."""
         self.connection_type = connection_type
         self.individual_address = (
@@ -101,6 +107,7 @@ class SecureConfig:
     * user_password: the user password for knx secure.
     * knxkeys_file_path: Full path to the knxkeys file including the file name.
     * knxkeys_password: Password to decrypt the knxkeys file.
+    * keyring: Already-loaded keyring if it shouldn't be read from the knxkeys file.
     """
 
     def __init__(
@@ -111,9 +118,10 @@ class SecureConfig:
         user_id: int | None = None,
         device_authentication_password: str | None = None,
         user_password: str | None = None,
-        knxkeys_file_path: str | None = None,
+        knxkeys_file_path: str | os.PathLike[Any] | None = None,
         knxkeys_password: str | None = None,
-    ):
+        keyring: Keyring | None = None,
+    ) -> None:
         """Initialize SecureConfig class."""
         self.backbone_key = bytes.fromhex(backbone_key) if backbone_key else None
         self.latency_ms = latency_ms
@@ -122,6 +130,7 @@ class SecureConfig:
         self.user_password = user_password
         self.knxkeys_file_path = knxkeys_file_path
         self.knxkeys_password = knxkeys_password
+        self.keyring = keyring
 
     def __eq__(self, other: object) -> bool:
         """Equality for SecureConfig class (used in unit tests)."""

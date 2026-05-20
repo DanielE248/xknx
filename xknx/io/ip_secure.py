@@ -1,11 +1,13 @@
 """IPSecure is an abstraction for handling a KNXnet/IP Secure layer."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from collections.abc import Callable
 import logging
 import random
-from typing import Callable, Final
+from typing import Final
 
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
@@ -15,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 from xknx.exceptions import (
     CommunicationError,
     CouldNotParseKNXIP,
+    IPSecureError,
     KNXSecureValidationError,
 )
 from xknx.knxip import (
@@ -37,6 +40,7 @@ from xknx.secure.security_primitives import (
     generate_ecdh_key_pair,
 )
 from xknx.secure.util import bytes_xor, sha256_hash
+from xknx.util import asyncio_timeout
 
 from .const import SESSION_KEEPALIVE_RATE, XKNX_SERIAL_NUMBER
 from .request_response import Authenticate, Session
@@ -55,6 +59,8 @@ MESSAGE_TAG_TUNNELLING = bytes.fromhex("00 00")  # use 0x00 0x00 for tunneling
 
 class _IPSecureTransportLayer(ABC):
     """Abstract for Secure transport layer."""
+
+    __slots__ = ()
 
     session_id: int
     _key: bytes
@@ -110,7 +116,16 @@ class _IPSecureTransportLayer(ABC):
 
     def encrypt_frame(self, plain_frame: KNXIPFrame) -> KNXIPFrame:
         """Wrap KNX/IP frame in SecureWrapper."""
-        sequence_information = self.get_sequence_information()
+        try:
+            sequence_information = self.get_sequence_information()
+        except OverflowError as err:
+            raise IPSecureError(
+                "KNX IP Secure sequence counter overflow."
+                "\nCongratulations! You've managed to overflow a counter designed to last about 9000 years! "
+                "Before celebrating, please check for any malfunctioning devices or suspicious activity "
+                "in your installation. Once you've ensured everything's safe, reset the secure session "
+                "to restore normal operation."
+            ) from err
         message_tag = self.get_message_tag()
         plain_payload = plain_frame.to_knx()  # P
         payload_length = len(plain_payload)  # Q
@@ -152,6 +167,22 @@ class _IPSecureTransportLayer(ABC):
 
 class SecureSession(TCPTransport, _IPSecureTransportLayer):
     """Class for handling a KNXnet/IP Secure tunnelling session."""
+
+    __slots__ = (
+        "_device_authentication_code",
+        "_keepalive_task",
+        "_key",
+        "_peer_public_key",
+        "_private_key",
+        "_sequence_number",
+        "_sequence_number_received",
+        "_session_status_handler",
+        "_user_password",
+        "initialized",
+        "public_key",
+        "session_id",
+        "user_id",
+    )
 
     def __init__(
         self,
@@ -219,7 +250,7 @@ class SecureSession(TCPTransport, _IPSecureTransportLayer):
             request_authentication.response.status
             != SecureSessionStatusCode.STATUS_AUTHENTICATION_SUCCESS
         ):
-            raise CommunicationError(
+            raise IPSecureError(
                 f"Secure session authentication failed: {request_authentication.response.status}"
             )
         self._session_status_handler = self.register_callback(
@@ -256,7 +287,7 @@ class SecureSession(TCPTransport, _IPSecureTransportLayer):
                 mac=session_response.message_authentication_code,
             )
             if mac_tr != response_mac_cbc:
-                raise CommunicationError("SessionResponse MAC verification failed.")
+                raise IPSecureError("SessionResponse MAC verification failed.")
         # calculate session key
         ecdh_shared_secret = self._private_key.exchange(self._peer_public_key)
         self._key = sha256_hash(ecdh_shared_secret)[:16]
@@ -339,7 +370,7 @@ class SecureSession(TCPTransport, _IPSecureTransportLayer):
         if self.initialized:
             knx_logger.debug("Encrypting frame: %s", knxipframe)
             knxipframe = self.encrypt_frame(plain_frame=knxipframe)
-            # keepalive timer is started with first and resetted with every other
+            # keepalive timer is started with first and reset with every other
             # SecureWrapper frame (including wrapped keepalive frames themselves)
             self.start_keepalive_task()
         # TODO: disallow sending unencrypted frames over non-initialized session with
@@ -388,6 +419,7 @@ class SecureSession(TCPTransport, _IPSecureTransportLayer):
 class SecureGroup(UDPTransport, _IPSecureTransportLayer):
     """Class for secure KNXnet/IP multicast communication."""
 
+    __slots__ = ("_key", "secure_timer")
     session_id = 0  # Routing uses fixed session id 0
 
     def __init__(
@@ -396,7 +428,7 @@ class SecureGroup(UDPTransport, _IPSecureTransportLayer):
         remote_addr: tuple[str, int],
         backbone_key: bytes,
         latency_ms: int = 1000,
-    ):
+    ) -> None:
         """Initialize SecureGroup class."""
         super().__init__(
             local_addr=local_addr,
@@ -441,7 +473,6 @@ class SecureGroup(UDPTransport, _IPSecureTransportLayer):
             secure_wrapper = knxipframe.body
             try:
                 knxipframe = self.decrypt_frame(knxipframe)
-                print(secure_wrapper)
             except KNXSecureValidationError as err:
                 ip_secure_logger.warning("Could not decrypt KNXIPFrame: %s", err)
                 # Frame shall be discarded
@@ -486,11 +517,31 @@ class SecureSequenceTimer:
     According to AN159 v06 KNXnet-IP Secure AS §2.2.2.3 Timer synchronizing
     """
 
+    __slots__ = (
+        "_backbone_key",
+        "_clock_difference",
+        "_expected_notify_handler",
+        "_loop",
+        "_notify_timer_handle",
+        "_transport_send",
+        "latency_tolerance_ms",
+        "max_delay_time_follower_periodic_notify",
+        "max_delay_time_follower_update_notify",
+        "max_delay_time_keeper_periodic_notify",
+        "max_delay_time_keeper_update_notify",
+        "min_delay_time_follower_periodic_notify",
+        "min_delay_time_follower_update_notify",
+        "sched_update",
+        "sync_latency_tolerance_ms",
+        "timekeeper",
+        "timer_authenticated",
+    )
+
     TIMER_NOTIFY_HEADER = bytes.fromhex("06 10 09 55 00 24")
 
-    min_delay_time_keeper_periodic_notify: Final = 10  # pylint: disable=invalid-name
-    min_delay_time_keeper_update_notify: Final = 0.1  # pylint: disable=invalid-name
-    sync_latency_fraction: int = 10  # 10%
+    MIN_DELAY_TIME_KEEPER_PERIODIC_NOTIFY: Final = 10  # seconds
+    MIN_DELAY_TIME_KEEPER_UPDATE_NOTIFY: Final = 0.1  # seconds
+    SYNC_LATENCY_FRACTION: Final = 10  # 10%
 
     def __init__(
         self,
@@ -501,9 +552,10 @@ class SecureSequenceTimer:
         """Initialize SecureSequenceTimer class."""
         self._backbone_key = backbone_key
         self._clock_difference: int = 0
-        self._expected_notify_handler: tuple[
-            bytes, asyncio.Future[int]  # message_tag, synchronization future
-        ] | None = None
+        self._expected_notify_handler: (
+            tuple[bytes, asyncio.Future[int]]  # message_tag, synchronization future
+            | None
+        ) = None
         self._loop = asyncio.get_running_loop()
         self._notify_timer_handle: asyncio.TimerHandle | None = None
         self._transport_send = transport_send
@@ -514,11 +566,11 @@ class SecureSequenceTimer:
 
         self.latency_tolerance_ms = latency_ms
         self.sync_latency_tolerance_ms: int = round(
-            latency_ms / 100 * self.sync_latency_fraction
+            latency_ms / 100 * self.SYNC_LATENCY_FRACTION
         )
         _sync_latency_tolerance_seconds = self.sync_latency_tolerance_ms / 1000
         self.max_delay_time_keeper_periodic_notify = (
-            self.min_delay_time_keeper_periodic_notify
+            self.MIN_DELAY_TIME_KEEPER_PERIODIC_NOTIFY
             + _sync_latency_tolerance_seconds * 3
         )
         self.min_delay_time_follower_periodic_notify = (
@@ -530,7 +582,7 @@ class SecureSequenceTimer:
             + _sync_latency_tolerance_seconds * 10
         )
         self.max_delay_time_keeper_update_notify = (
-            self.min_delay_time_keeper_update_notify
+            self.MIN_DELAY_TIME_KEEPER_UPDATE_NOTIFY
             + _sync_latency_tolerance_seconds * 1
         )
         self.min_delay_time_follower_update_notify = (
@@ -577,13 +629,13 @@ class SecureSequenceTimer:
         max_delay: float
         if self.sched_update:
             if self.timekeeper:
-                min_delay = self.min_delay_time_keeper_update_notify
+                min_delay = self.MIN_DELAY_TIME_KEEPER_UPDATE_NOTIFY
                 max_delay = self.max_delay_time_keeper_update_notify
             else:
                 min_delay = self.min_delay_time_follower_update_notify
                 max_delay = self.max_delay_time_follower_update_notify
         elif self.timekeeper:
-            min_delay = self.min_delay_time_keeper_periodic_notify
+            min_delay = self.MIN_DELAY_TIME_KEEPER_PERIODIC_NOTIFY
             max_delay = self.max_delay_time_keeper_periodic_notify
         else:
             min_delay = self.min_delay_time_follower_periodic_notify
@@ -673,13 +725,11 @@ class SecureSequenceTimer:
         self._expected_notify_handler = message_tag, waiter_fut
         self.send_timer_notify(message_tag=message_tag)
         try:
-            timer_value = await asyncio.wait_for(
-                waiter_fut,
-                timeout=(  # 3.3 seconds at latency_ms=1000, sync_latency_fraction=10%
-                    self.max_delay_time_follower_update_notify
-                    + 2 * self.latency_tolerance_ms / 1000
-                ),
-            )
+            async with asyncio_timeout(  # 3.3 seconds at latency_ms=1000, SYNC_LATENCY_FRACTION=10%
+                self.max_delay_time_follower_update_notify
+                + 2 * self.latency_tolerance_ms / 1000
+            ):
+                timer_value = await waiter_fut
             self.update(new_value=timer_value)
         except asyncio.TimeoutError:
             # use highest received timer value of TimerNotify or SecureWrapper frames

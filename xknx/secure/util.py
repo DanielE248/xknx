@@ -1,12 +1,16 @@
 """Utilities for KNX Secure."""
+
 from cryptography.hazmat.primitives import hashes
+
+# py3.12 collections.abc.Buffer can be used instead
+Buffer = bytes | bytearray | memoryview
 
 
 def bytes_xor(a: bytes, b: bytes) -> bytes:  # pylint: disable=invalid-name
     """
     XOR two bytes values.
 
-    Different lenghts raise ValueError.
+    Different lengths raise ValueError.
     """
     if len(a) != len(b):
         raise ValueError("Length of a and b must be equal.")
@@ -20,7 +24,7 @@ def byte_pad(data: bytes, block_size: int) -> bytes:
     return data
 
 
-def sha256_hash(data: bytes) -> bytes:
+def sha256_hash(data: Buffer) -> bytes:
     """Calculate SHA256 hash of data."""
     digest = hashes.Hash(hashes.SHA256())
     digest.update(data)

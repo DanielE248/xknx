@@ -1,11 +1,13 @@
 """Package for management communication."""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
 import logging
-from typing import TYPE_CHECKING, Callable
+import time
+from typing import TYPE_CHECKING
 
 from xknx.exceptions import (
     CommunicationError,
@@ -14,9 +16,17 @@ from xknx.exceptions import (
     ManagementConnectionRefused,
     ManagementConnectionTimeout,
 )
-from xknx.telegram import IndividualAddress, Telegram
+from xknx.telegram import GroupAddress, IndividualAddress, Telegram
 from xknx.telegram.apci import APCI
-from xknx.telegram.tpci import TAck, TConnect, TDataConnected, TDisconnect, TNak
+from xknx.telegram.tpci import (
+    TAck,
+    TConnect,
+    TDataBroadcast,
+    TDataConnected,
+    TDisconnect,
+    TNak,
+)
+from xknx.util import asyncio_timeout
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
@@ -29,10 +39,13 @@ MANAGAMENT_CONNECTION_TIMEOUT = 6
 class Management:
     """Class for management procedures as described in KNX-Standard 3.5.2."""
 
+    __slots__ = ("_broadcast_contexts", "_connections", "xknx")
+
     def __init__(self, xknx: XKNX) -> None:
         """Initialize Management class."""
         self.xknx = xknx
         self._connections: dict[IndividualAddress, P2PConnection] = {}
+        self._broadcast_contexts: set[BroadcastContext] = set()
 
     def process(self, telegram: Telegram) -> None:
         """Process incoming telegrams."""
@@ -41,7 +54,9 @@ class Management:
                 destination_address=telegram.source_address,
                 tpci=TAck(sequence_number=telegram.tpci.sequence_number),
             )
-            asyncio.create_task(self.xknx.cemi_handler.send_telegram(ack))
+            self.xknx.task_registry.background(
+                self.xknx.cemi_handler.send_telegram(ack)
+            )
         if conn := self._connections.get(telegram.source_address):
             conn.process(telegram)
             return
@@ -58,16 +73,24 @@ class Management:
             disconnect = Telegram(
                 destination_address=telegram.source_address, tpci=TDisconnect()
             )
-            asyncio.create_task(self.xknx.cemi_handler.send_telegram(disconnect))
+            self.xknx.task_registry.background(
+                self.xknx.cemi_handler.send_telegram(disconnect)
+            )
             return
-        logger.warning("Unhandled management telegram: %r", telegram)
+        if isinstance(telegram.tpci, TDataBroadcast):
+            for context in self._broadcast_contexts:
+                context.queue.put_nowait(telegram)
+            return
+        logger.debug("Unhandled management telegram: %r", telegram)
         return
 
-    async def connect(self, address: IndividualAddress) -> P2PConnection:
+    async def connect(
+        self, address: IndividualAddress, rate_limit: int = 20
+    ) -> P2PConnection:
         """Open a point-to-point connection to a KNX device."""
         if address in self._connections:
             raise ManagementConnectionError(f"Connection to {address} already exists.")
-        p2p_connection = P2PConnection(self.xknx, address)
+        p2p_connection = P2PConnection(self.xknx, address, rate_limit)
         try:
             await p2p_connection.connect()
         except ManagementConnectionError as exc:
@@ -102,33 +125,96 @@ class Management:
 
     @asynccontextmanager
     async def connection(
-        self, address: IndividualAddress
+        self, address: IndividualAddress, rate_limit: int = 20
     ) -> AsyncIterator[P2PConnection]:
         """Provide a point-to-point connection to a KNX device."""
-        conn = await self.connect(address)
+        conn = await self.connect(address, rate_limit)
         try:
             yield conn
         finally:
             await self.disconnect(address)
 
+    async def send_broadcast(self, payload: APCI) -> None:
+        """Send a broadcast message."""
+        await self.xknx.cemi_handler.send_telegram(
+            Telegram(
+                GroupAddress("0/0/0"),
+                tpci=TDataBroadcast(),
+                payload=payload,
+            )
+        )
+
+    @asynccontextmanager
+    async def broadcast(self) -> AsyncIterator[BroadcastContext]:
+        """Provide a broadcast context."""
+        context = BroadcastContext()
+        self._broadcast_contexts.add(context)
+        try:
+            yield context
+        finally:
+            self._broadcast_contexts.remove(context)
+
+
+class BroadcastContext:
+    """Class providing broadcast contexts."""
+
+    __slots__ = ("queue",)
+
+    def __init__(self) -> None:
+        """Initialize BroadcastContext class."""
+        self.queue: asyncio.Queue[Telegram] = asyncio.Queue()
+
+    async def receive(
+        self,
+        timeout: float | None = 3,
+    ) -> AsyncGenerator[Telegram, None]:
+        """Receive telegrams from the broadcast context."""
+        try:
+            async with asyncio_timeout(timeout):
+                while True:
+                    try:
+                        yield await self.queue.get()
+                    except GeneratorExit:
+                        return
+        except asyncio.TimeoutError:
+            return
+
 
 class P2PConnection:
     """Class to manage a point-to-point connection with a KNX device."""
 
-    def __init__(self, xknx: XKNX, address: IndividualAddress) -> None:
+    __slots__ = (
+        "_ack_waiter",
+        "_connected",
+        "_expected_sequence_number",
+        "_last_response_time",
+        "_response_waiter",
+        "address",
+        "disconnect_hook",
+        "rate_limit",
+        "sequence_number",
+        "xknx",
+    )
+
+    def __init__(
+        self, xknx: XKNX, address: IndividualAddress, rate_limit: int = 20
+    ) -> None:
         """Initialize P2PConnection class."""
         self.xknx = xknx
         self.address = address
         self.disconnect_hook: Callable[[], None]
+        self.rate_limit = rate_limit
 
         self.sequence_number = self._sequence_number_generator()
         self._expected_sequence_number = 0
         self._connected = False
 
+        self._last_response_time: float = 0
+
         self._ack_waiter: asyncio.Future[TAck | TNak] | None = None
-        self._response_waiter: asyncio.Future[
-            Telegram
-        ] = asyncio.get_event_loop().create_future()
+        self._response_waiter: asyncio.Future[Telegram] = (
+            asyncio.get_event_loop().create_future()
+        )
 
     @staticmethod
     def _sequence_number_generator() -> Generator[int, None, None]:
@@ -195,7 +281,7 @@ class P2PConnection:
             if not self._response_waiter.done():
                 self._response_waiter.set_exception(ManagementConnectionRefused())
             return
-        if isinstance(telegram.tpci, (TAck, TNak)):
+        if isinstance(telegram.tpci, TAck | TNak):
             if not self._ack_waiter:
                 logger.warning("Received unexpected ACK/NAK: %s", telegram)
                 return
@@ -238,9 +324,10 @@ class P2PConnection:
         )
         try:
             await self.xknx.cemi_handler.send_telegram(telegram)
-            ack = await asyncio.wait_for(self._ack_waiter, MANAGAMENT_ACK_TIMEOUT)
+            async with asyncio_timeout(MANAGAMENT_ACK_TIMEOUT):
+                ack = await self._ack_waiter
         except asyncio.TimeoutError:
-            logger.debug(
+            logger.info(
                 "%s: timeout while waiting for ACK. Resending Telegram.", self.address
             )
             # resend once after 3 seconds without ACK
@@ -248,7 +335,8 @@ class P2PConnection:
             self._ack_waiter = asyncio.get_event_loop().create_future()
             await self.xknx.cemi_handler.send_telegram(telegram)
             try:
-                ack = await asyncio.wait_for(self._ack_waiter, MANAGAMENT_ACK_TIMEOUT)
+                async with asyncio_timeout(MANAGAMENT_ACK_TIMEOUT):
+                    ack = await self._ack_waiter
             except asyncio.TimeoutError:
                 raise ManagementConnectionTimeout(
                     "No ACK received for repeated telegram."
@@ -274,9 +362,8 @@ class P2PConnection:
     async def _receive(self, expected_payload: type[APCI] | None) -> Telegram:
         """Wait for a telegram from the KNX device."""
         try:
-            telegram = await asyncio.wait_for(
-                self._response_waiter, timeout=MANAGAMENT_CONNECTION_TIMEOUT
-            )
+            async with asyncio_timeout(MANAGAMENT_CONNECTION_TIMEOUT):
+                telegram = await self._response_waiter
         except asyncio.TimeoutError:
             raise ManagementConnectionTimeout(
                 f"Timeout while waiting for {expected_payload}"
@@ -297,5 +384,15 @@ class P2PConnection:
             raise ManagementConnectionRefused(
                 "Management connection disconnected by the peer."
             )
+
+        if self.rate_limit:
+            # time in seconds since the last request operation
+            time_diff = time.time() - self._last_response_time
+            wait_time = 1 / self.rate_limit
+            if time_diff < wait_time:
+                await asyncio.sleep(wait_time - time_diff)
+
         await self._send_data(payload)
-        return await self._receive(expected)
+        response = await self._receive(expected)
+        self._last_response_time = time.time()
+        return response

@@ -4,12 +4,14 @@ Abstract base for a specific IP transports (TCP or UDP).
 * It starts and stops a socket
 * It handles callbacks for incoming frame service types
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from collections.abc import Callable
 import logging
-from typing import Callable, cast
+from typing import cast
 
 from xknx.exceptions import CommunicationError
 from xknx.knxip import HPAI, KNXIPFrame, KNXIPServiceType
@@ -22,6 +24,8 @@ knx_logger = logging.getLogger("xknx.knx")
 class KNXIPTransport(ABC):
     """Abstract base class for KNX/IP transports."""
 
+    __slots__ = ("callbacks", "local_hpai", "remote_addr", "transport")
+
     callbacks: list[KNXIPTransport.Callback]
     local_hpai: HPAI
     remote_addr: tuple[str, int]
@@ -30,11 +34,13 @@ class KNXIPTransport(ABC):
     class Callback:
         """Callback class for handling callbacks for different 'KNX service types' of received packets."""
 
+        __slots__ = ("callback", "service_types")
+
         def __init__(
             self,
             callback: TransportCallbackType,
             service_types: list[KNXIPServiceType] | None = None,
-        ):
+        ) -> None:
             """Initialize Callback class."""
             self.callback = callback
             self.service_types = service_types or []

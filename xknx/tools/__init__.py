@@ -1,5 +1,5 @@
 """Module for communication tools."""
-# flake8: noqa
+
 from .group_communication import (
     group_value_read,
     group_value_response,

@@ -1,5 +1,6 @@
 """Unit test for Switch objects."""
-from unittest.mock import AsyncMock, patch
+
+from unittest.mock import AsyncMock, Mock, patch
 
 from xknx import XKNX
 from xknx.devices import Device, Sensor
@@ -12,33 +13,33 @@ from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWri
 class TestDevice:
     """Test class for Switch object."""
 
-    async def test_device_updated_cb(self):
+    def test_device_updated_cb(self) -> None:
         """Test device updated cb is added to the device."""
         xknx = XKNX()
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         device = Device(xknx, "TestDevice", device_updated_cb=after_update_callback)
 
-        await device.after_update()
+        device.after_update()
         after_update_callback.assert_called_with(device)
 
-    async def test_process_callback(self):
+    def test_process_callback(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if callback was called."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
-        after_update_callback1 = AsyncMock()
-        after_update_callback2 = AsyncMock()
+        after_update_callback1 = Mock()
+        after_update_callback2 = Mock()
         device.register_device_updated_cb(after_update_callback1)
         device.register_device_updated_cb(after_update_callback2)
 
         # Triggering first time. Both have to be called
-        await device.after_update()
+        device.after_update()
         after_update_callback1.assert_called_with(device)
         after_update_callback2.assert_called_with(device)
         after_update_callback1.reset_mock()
         after_update_callback2.reset_mock()
 
         # Triggering 2nd time. Both have to be called
-        await device.after_update()
+        device.after_update()
         after_update_callback1.assert_called_with(device)
         after_update_callback2.assert_called_with(device)
         after_update_callback1.reset_mock()
@@ -46,7 +47,7 @@ class TestDevice:
 
         # Unregistering first callback
         device.unregister_device_updated_cb(after_update_callback1)
-        await device.after_update()
+        device.after_update()
         after_update_callback1.assert_not_called()
         after_update_callback2.assert_called_with(device)
         after_update_callback1.reset_mock()
@@ -54,24 +55,24 @@ class TestDevice:
 
         # Unregistering second callback
         device.unregister_device_updated_cb(after_update_callback2)
-        await device.after_update()
+        device.after_update()
         after_update_callback1.assert_not_called()
         after_update_callback2.assert_not_called()
 
     @patch("logging.Logger.exception")
-    async def test_bad_callback(self, logging_exception_mock):
+    def test_bad_callback(self, logging_exception_mock: Mock) -> None:
         """Test handling callback raising an exception."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
-        good_callback_1 = AsyncMock()
-        bad_callback = AsyncMock(side_effect=Exception("Boom"))
-        good_callback_2 = AsyncMock()
+        good_callback_1 = Mock()
+        bad_callback = Mock(side_effect=Exception("Boom"))
+        good_callback_2 = Mock()
 
         device.register_device_updated_cb(good_callback_1)
         device.register_device_updated_cb(bad_callback)
         device.register_device_updated_cb(good_callback_2)
 
-        await device.after_update()
+        device.after_update()
         good_callback_1.assert_called_with(device)
         bad_callback.assert_called_with(device)
         good_callback_2.assert_called_with(device)
@@ -81,41 +82,35 @@ class TestDevice:
             device,
         )
 
-    async def test_process(self):
+    async def test_process(self) -> None:
         """Test if telegram is handled by the correct process_* method."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
 
-        with patch(
-            "xknx.devices.Device.process_group_read", new_callable=AsyncMock
-        ) as mock_group_read:
+        with patch("xknx.devices.Device.process_group_read") as mock_group_read:
             telegram = Telegram(
                 destination_address=GroupAddress("1/2/1"), payload=GroupValueRead()
             )
-            await device.process(telegram)
+            device.process(telegram)
             mock_group_read.assert_called_with(telegram)
 
-        with patch(
-            "xknx.devices.Device.process_group_write", new_callable=AsyncMock
-        ) as mock_group_write:
+        with patch("xknx.devices.Device.process_group_write") as mock_group_write:
             telegram = Telegram(
                 destination_address=GroupAddress("1/2/1"),
                 payload=GroupValueWrite(DPTArray((0x01, 0x02))),
             )
-            await device.process(telegram)
+            device.process(telegram)
             mock_group_write.assert_called_with(telegram)
 
-        with patch(
-            "xknx.devices.Device.process_group_response", new_callable=AsyncMock
-        ) as mock_group_response:
+        with patch("xknx.devices.Device.process_group_response") as mock_group_response:
             telegram = Telegram(
                 destination_address=GroupAddress("1/2/1"),
                 payload=GroupValueResponse(DPTArray((0x01, 0x02))),
             )
-            await device.process(telegram)
+            device.process(telegram)
             mock_group_response.assert_called_with(telegram)
 
-    async def test_sync_with_wait(self):
+    async def test_sync_with_wait(self) -> None:
         """Test sync with wait_for_result=True."""
         xknx = XKNX()
         sensor = Sensor(
@@ -128,28 +123,24 @@ class TestDevice:
             await sensor.sync(wait_for_result=True)
             read_state_mock.assert_called_with(wait_for_result=True)
 
-    async def test_process_group_write(self):
+    async def test_process_group_write(self) -> None:
         """Test if process_group_write. Nothing really to test here."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
-        await device.process_group_write(Telegram(destination_address=GroupAddress(1)))
+        device.process_group_write(Telegram(destination_address=GroupAddress(1)))
 
-    async def test_process_group_response(self):
+    async def test_process_group_response(self) -> None:
         """Test if process_group_read. Testing if mapped to group_write."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
-        with patch(
-            "xknx.devices.Device.process_group_write", new_callable=AsyncMock
-        ) as mock_group_write:
-            await device.process_group_response(
-                Telegram(destination_address=GroupAddress(1))
-            )
+        with patch("xknx.devices.Device.process_group_write") as mock_group_write:
+            device.process_group_response(Telegram(destination_address=GroupAddress(1)))
             mock_group_write.assert_called_with(
                 Telegram(destination_address=GroupAddress(1))
             )
 
-    async def test_process_group_read(self):
+    async def test_process_group_read(self) -> None:
         """Test if process_group_read. Nothing really to test here."""
         xknx = XKNX()
         device = Device(xknx, "TestDevice")
-        await device.process_group_read(Telegram(destination_address=GroupAddress(1)))
+        device.process_group_read(Telegram(destination_address=GroupAddress(1)))

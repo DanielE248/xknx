@@ -3,6 +3,7 @@ Module for Serialization and Deserialization of a KNX Disconnect Request informa
 
 Disconnect requests are used to disconnect a tunnel from a KNX/IP device.
 """
+
 from __future__ import annotations
 
 from xknx.exceptions import CouldNotParseKNXIP
@@ -21,7 +22,7 @@ class DisconnectRequest(KNXIPBody):
         self,
         communication_channel_id: int = 1,
         control_endpoint: HPAI | None = None,
-    ):
+    ) -> None:
         """Initialize DisconnectRequest object."""
         self.communication_channel_id = communication_channel_id
         self.control_endpoint = control_endpoint or HPAI()

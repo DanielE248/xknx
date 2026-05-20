@@ -7,6 +7,7 @@ control endpoint using the HPAI included in the received DESCRIPTION_REQUEST fra
 The size of the KNXnet/IP body varies depending on the number of DIB structures sent
 by the KNXnet/IP Server in response to the KNXnet/IP Clients DESCRIPTION_REQUEST.
 """
+
 from __future__ import annotations
 
 from .body import KNXIPBody
@@ -51,4 +52,4 @@ class DescriptionResponse(KNXIPBody):
     def __repr__(self) -> str:
         """Return object as readable string."""
         _dibs_str = ",\n".join(dib.__repr__() for dib in self.dibs)
-        return "<DescriptionResponse " f'dibs="[\n{_dibs_str}\n]" />'
+        return f'<DescriptionResponse dibs="[\n{_dibs_str}\n]" />'

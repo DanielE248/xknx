@@ -6,11 +6,10 @@ It provides functionality for
 * switching 'on' and 'off'.
 * reading the current state from KNX bus.
 """
+
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
-from functools import partial
 import logging
 from typing import TYPE_CHECKING
 
@@ -33,20 +32,26 @@ class Switch(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         respond_to_read: bool = False,
         sync_state: bool | int | float | str = True,
         invert: bool = False,
         reset_after: float | None = None,
         device_updated_cb: DeviceCallbackType[Switch] | None = None,
-    ):
+    ) -> None:
         """Initialize Switch class."""
         super().__init__(xknx, name, device_updated_cb)
 
-        self.reset_after = reset_after
-        self._reset_task_name = f"switch.reset_{id(self)}"
-        self._reset_task: Task | None = None
+        self._reset_task: Task | None = (
+            Task(
+                name=f"switch.reset_{id(self)}",
+                target=self.set_off,
+                wait_before_start=reset_after,
+            )
+            if reset_after is not None
+            else None
+        )
         self.respond_to_read = respond_to_read
         self.switch = RemoteValueSwitch(
             xknx,
@@ -62,14 +67,10 @@ class Switch(Device):
         """Iterate the devices RemoteValue classes."""
         yield self.switch
 
-    def __del__(self) -> None:
-        """Destructor. Cleaning up if this was not done before."""
-        if self._reset_task:
-            try:
-                self._reset_task.cancel()
-            except RuntimeError:
-                pass
-        super().__del__()
+    def async_remove_tasks(self) -> None:
+        """Remove async tasks of device."""
+        if self._reset_task is not None:
+            self.xknx.task_registry.remove_task(self._reset_task)
 
     @property
     def state(self) -> bool | None:
@@ -78,33 +79,25 @@ class Switch(Device):
 
     async def set_on(self) -> None:
         """Switch on switch."""
-        await self.switch.on()
+        self.switch.on()
 
     async def set_off(self) -> None:
         """Switch off switch."""
-        await self.switch.off()
+        self.switch.off()
 
-    async def process_group_write(self, telegram: "Telegram") -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
-        if await self.switch.process(telegram):
-            if self.reset_after is not None and self.switch.value:
-                self._reset_task = self.xknx.task_registry.register(
-                    name=self._reset_task_name,
-                    async_func=partial(self._reset_state, self.reset_after),
-                    track_task=True,
-                ).start()
+        if self.switch.process(telegram):
+            if self._reset_task is not None and self.switch.value:
+                self.xknx.task_registry.start_task(self._reset_task)
 
-    async def process_group_read(self, telegram: "Telegram") -> None:
+    def process_group_read(self, telegram: Telegram) -> None:
         """Process incoming GroupValueResponse telegrams."""
         if (
             self.respond_to_read
             and telegram.destination_address == self.switch.group_address
         ):
-            await self.switch.respond()
-
-    async def _reset_state(self, wait_seconds: float) -> None:
-        await asyncio.sleep(wait_seconds)
-        await self.set_off()
+            self.switch.respond()
 
     def __str__(self) -> str:
         """Return object as readable string."""

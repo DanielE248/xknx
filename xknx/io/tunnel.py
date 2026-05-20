@@ -3,22 +3,22 @@ Abstraction for handling KNX/IP tunnels.
 
 Tunnels connect to KNX/IP devices directly via UDP or TCP and build a static connection.
 """
+
 from __future__ import annotations
 
 from abc import abstractmethod
 import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 import logging
 from typing import TYPE_CHECKING
 
 from xknx.cemi import CEMIFrame
-from xknx.core import XknxConnectionState
-from xknx.exceptions import (
-    CommunicationError,
-    TunnellingAckError,
-    UnsupportedCEMIMessage,
-)
+from xknx.core import XknxConnectionState, XknxConnectionType
+from xknx.exceptions import CommunicationError, TunnellingAckError
 from xknx.knxip import (
     HPAI,
+    ConnectRequestInformation,
     DisconnectRequest,
     DisconnectResponse,
     HostProtocol,
@@ -31,7 +31,7 @@ from xknx.telegram import IndividualAddress
 
 from .const import HEARTBEAT_RATE
 from .gateway_scanner import GatewayDescriptor
-from .interface import CEMICallbackType, Interface
+from .interface import CEMIBytesCallbackType, Interface
 from .ip_secure import SecureSession
 from .request_response import Connect, ConnectionState, Disconnect, Tunnelling
 from .self_description import DescriptionQuery
@@ -41,21 +41,37 @@ if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 logger = logging.getLogger("xknx.log")
-cemi_logger = logging.getLogger("xknx.cemi")
 
 
 class _Tunnel(Interface):
     """Class for handling KNX/IP tunnels."""
 
+    __slots__ = (
+        "_data_endpoint_addr",
+        "_heartbeat_task",
+        "_reconnect_task",
+        "_requested_address",
+        "_send_lock",
+        "_src_address",
+        "auto_reconnect",
+        "auto_reconnect_wait",
+        "cemi_received_callback",
+        "communication_channel",
+        "local_hpai",
+        "sequence_number",
+        "xknx",
+    )
+
+    connection_type: XknxConnectionType
     transport: KNXIPTransport
 
     def __init__(
         self,
         xknx: XKNX,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         auto_reconnect: bool = True,
         auto_reconnect_wait: int = 3,
-    ):
+    ) -> None:
         """Initialize Tunnel class."""
         self.xknx = xknx
         self.auto_reconnect = auto_reconnect
@@ -67,12 +83,10 @@ class _Tunnel(Interface):
         self.cemi_received_callback = cemi_received_callback
         self._data_endpoint_addr: tuple[str, int] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
-        self._initial_connection = True
-        self._is_reconnecting = False
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._requested_address: IndividualAddress | None = None
         self._src_address = IndividualAddress(0)
         self._send_lock = asyncio.Lock()
-        # self._tunnelling_request_confirmation_event = asyncio.Event()
 
         self._init_transport()
         self.transport.register_callback(
@@ -99,10 +113,14 @@ class _Tunnel(Interface):
     #
     ####################
 
-    async def connect(self) -> bool:
-        """Connect to a KNX tunneling interface. Returns True on success."""
-        await self.xknx.connection_manager.connection_state_changed(
-            XknxConnectionState.CONNECTING
+    async def connect(self) -> None:
+        """
+        Connect to a KNX tunneling interface.
+
+        Raise CommunicationError when not successful.
+        """
+        self.xknx.connection_manager.connection_state_changed(
+            XknxConnectionState.CONNECTING, self.connection_type
         )
         try:
             await self.transport.connect()
@@ -114,12 +132,9 @@ class _Tunnel(Interface):
                 type(ex).__name__,
                 ex,
             )
-            await self.xknx.connection_manager.connection_state_changed(
+            self.xknx.connection_manager.connection_state_changed(
                 XknxConnectionState.DISCONNECTED
             )
-            if not self._initial_connection and self.auto_reconnect:
-                self._reconnect_task = asyncio.create_task(self._reconnect())
-                return False
             # close transport to prevent open file descriptors
             self.transport.stop()
             raise CommunicationError(
@@ -127,56 +142,90 @@ class _Tunnel(Interface):
             ) from ex
 
         self._tunnel_established()
-        await self.xknx.connection_manager.connection_state_changed(
-            XknxConnectionState.CONNECTED
+        self.xknx.connection_manager.connection_state_changed(
+            XknxConnectionState.CONNECTED, self.connection_type
         )
-        return True
 
     def _tunnel_established(self) -> None:
         """Set up interface when the tunnel is ready."""
-        self._initial_connection = False
         self.sequence_number = 0
         self.start_heartbeat()
 
     def _tunnel_lost(self) -> None:
         """Prepare for reconnection or shutdown when the connection is lost. Callback."""
-        self.stop_heartbeat()
-        asyncio.create_task(
-            self.xknx.connection_manager.connection_state_changed(
-                XknxConnectionState.DISCONNECTED
-            )
-        )
-        self._data_endpoint_addr = None
         if self.auto_reconnect:
-            self._reconnect_task = asyncio.create_task(self._reconnect())
-        else:
-            raise CommunicationError("Tunnel connection closed.")
+            # _tunnel_lost might be called multiple times when the transport receives
+            # multiple invalid frames - ensure only one reconnect task is started
+            if self._reconnect_task is None:
+
+                def _reconnect_task_cleanup(_: asyncio.Task[None]) -> None:
+                    """Cleanup task so we don't need to check `done()` or do it explicitly everywhere."""
+                    self._reconnect_task = None
+
+                self._reconnect_task = asyncio.create_task(self._reconnect())
+                self._reconnect_task.add_done_callback(_reconnect_task_cleanup)
+            else:
+                logger.debug("Reconnect already in progress.")
+            return
+
+        # no reconnect - clean up, close transport, raise
+        self._prepare_disconnect()
+        if self.transport.transport:
+            if self.communication_channel is not None:
+                # Don't wait for DisconnectResponse (no async here anyway)
+                disconnect_request = DisconnectRequest(
+                    communication_channel_id=self.communication_channel,
+                    control_endpoint=self.local_hpai,
+                )
+                self.transport.send(KNXIPFrame.init_from_body(disconnect_request))
+            self.transport.stop()
+        logger.warning("Tunnel connection closed. auto_reconnect is disabled.")
 
     async def _reconnect(self) -> None:
         """Reconnect to tunnel device."""
+        self._prepare_disconnect()
         if self.transport.transport:
-            await self._disconnect_request(True)
+            # when server issued DisconnectRequest communication_channel is already None so this is a no-op
+            await self._disconnect_request()
+            self._data_endpoint_addr = None
             self.transport.stop()
-        await asyncio.sleep(self.auto_reconnect_wait)
-        if await self.connect():
-            logger.info("Successfully reconnected to KNX bus.")
+
+        attempt = 1
+        while True:
+            try:
+                logger.debug("Reconnecting to KNX bus... (attempt %s)", attempt)
+                await self.connect()
+            except CommunicationError:
+                attempt += 1
+                logger.debug(
+                    "Reconnection to KNX bus failed. Trying again in %s seconds.",
+                    self.auto_reconnect_wait,
+                )
+                await asyncio.sleep(self.auto_reconnect_wait)
+            else:
+                logger.info("Successfully reconnected to KNX bus.")
+                break
+
+    def _prepare_disconnect(self) -> None:
+        """Prepare for disconnect. Stop tunnel related tasks and set connection state."""
+        self.stop_heartbeat()
+        self.xknx.connection_manager.connection_state_changed(
+            XknxConnectionState.DISCONNECTED
+        )
 
     def _stop_reconnect(self) -> None:
         """Stop reconnect task if running."""
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
-            self._reconnect_task = None
 
     async def disconnect(self) -> None:
         """Disconnect tunneling connection."""
-        self.stop_heartbeat()
-        await self.xknx.connection_manager.connection_state_changed(
-            XknxConnectionState.DISCONNECTED
-        )
-        self._data_endpoint_addr = None
+        self._prepare_disconnect()
         self._stop_reconnect()
-        await self._disconnect_request(False)
-        self.transport.stop()
+        try:
+            await self._disconnect_request()
+        finally:
+            self.transport.stop()
 
     ####################
     #
@@ -186,7 +235,11 @@ class _Tunnel(Interface):
 
     async def _connect_request(self) -> bool:
         """Connect to tunnelling server. Set communication_channel and src_address."""
-        connect = Connect(transport=self.transport, local_hpai=self.local_hpai)
+        connect = Connect(
+            transport=self.transport,
+            local_hpai=self.local_hpai,
+            cri=ConnectRequestInformation(individual_address=self._requested_address),
+        )
         await connect.start()
         if connect.success:
             self.communication_channel = connect.communication_channel
@@ -197,7 +250,7 @@ class _Tunnel(Interface):
                 else connect.data_endpoint.addr_tuple
             )
             # Use the individual address provided by the tunnelling server
-            self._src_address = IndividualAddress(connect.identifier)
+            self._src_address = connect.crd.individual_address or IndividualAddress(0)
             self.xknx.current_address = self._src_address
             logger.debug(
                 "Tunnel established. communication_channel=%s, address=%s",
@@ -225,7 +278,7 @@ class _Tunnel(Interface):
             status_code = error_code.name
         return conn_state.success, status_code
 
-    async def _disconnect_request(self, ignore_error: bool = False) -> None:
+    async def _disconnect_request(self) -> None:
         """Disconnect from tunnel device. Delete communication_channel."""
         if self.communication_channel is not None:
             disconnect = Disconnect(
@@ -234,13 +287,22 @@ class _Tunnel(Interface):
                 local_hpai=self.local_hpai,
             )
             await disconnect.start()
-            if not disconnect.success and not ignore_error:
-                self.communication_channel = None
-                raise CommunicationError("Could not disconnect channel")
-            logger.debug(
-                "Tunnel disconnected (communication_channel: %s)",
-                self.communication_channel,
-            )
+            if disconnect.success:
+                logger.debug(
+                    "Tunnel disconnect succeeded (communication_channel: %s)",
+                    self.communication_channel,
+                )
+            else:
+                error_msg = (
+                    f"with error code: {disconnect.response_status_code}"
+                    if disconnect.response_status_code is not None
+                    else "- no response from device (timeout)"
+                )
+                logger.warning(
+                    "Tunnel disconnect failed (communication_channel: %s) %s",
+                    self.communication_channel,
+                    error_msg,
+                )
         self.communication_channel = None
 
     async def request_description(self) -> GatewayDescriptor | None:
@@ -252,6 +314,18 @@ class _Tunnel(Interface):
         await description.start()
         return description.gateway_descriptor
 
+    @asynccontextmanager
+    async def _send_ready(self) -> AsyncGenerator[None, None]:
+        """Lock for sending frames sequentially and waiting for reconnect if applicable."""
+        async with self._send_lock:
+            # don't drop frames when reconnecting - wait for reconnect to finish
+            if self._reconnect_task is not None:
+                try:
+                    await self._reconnect_task
+                except asyncio.CancelledError:
+                    pass
+            yield
+
     async def send_cemi(self, cemi: CEMIFrame) -> None:
         """
         Send CEMI Frame to tunnelling server.
@@ -259,7 +333,7 @@ class _Tunnel(Interface):
         A transport layer confirmation shall be awaited before sending the next telegram.
         """
         raw_cemi = cemi.to_knx()
-        async with self._send_lock:
+        async with self._send_ready():
             try:
                 await self._tunnelling_request(raw_cemi)
             finally:
@@ -307,12 +381,7 @@ class _Tunnel(Interface):
         self, tunneling_request: TunnellingRequest
     ) -> None:
         """Handle incoming tunnel request."""
-        try:
-            cemi = CEMIFrame.from_knx(tunneling_request.raw_cemi)
-        except UnsupportedCEMIMessage as unsupported_cemi_err:
-            logger.warning("CEMI not supported: %s", unsupported_cemi_err)
-            return
-        self.cemi_received_callback(cemi)
+        self.cemi_received_callback(tunneling_request.raw_cemi)
 
     def _disconnect_request_received(
         self, disconnect_request: DisconnectRequest
@@ -377,12 +446,23 @@ class _Tunnel(Interface):
 class UDPTunnel(_Tunnel):
     """Class for handling KNX/IP UDP tunnels."""
 
+    __slots__ = (
+        "_invalid_sequence_number_reconnect_task",
+        "expected_sequence_number",
+        "gateway_ip",
+        "gateway_port",
+        "local_ip",
+        "local_port",
+        "route_back",
+    )
+
+    connection_type = XknxConnectionType.TUNNEL_UDP
     transport: UDPTransport
 
     def __init__(
         self,
         xknx: XKNX,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         gateway_ip: str,
         gateway_port: int,
         local_ip: str,
@@ -390,7 +470,7 @@ class UDPTunnel(_Tunnel):
         route_back: bool = False,
         auto_reconnect: bool = True,
         auto_reconnect_wait: int = 3,
-    ):
+    ) -> None:
         """Initialize Tunnel class."""
         self.gateway_ip = gateway_ip
         self.gateway_port = gateway_port
@@ -404,6 +484,7 @@ class UDPTunnel(_Tunnel):
             auto_reconnect_wait=auto_reconnect_wait,
         )
         self.expected_sequence_number = 0
+        self._invalid_sequence_number_reconnect_task: asyncio.Task[None] | None = None
 
     def _init_transport(self) -> None:
         """Initialize transport transport."""
@@ -423,7 +504,16 @@ class UDPTunnel(_Tunnel):
         (local_addr, local_port) = self.transport.getsockname()
         self.local_hpai = HPAI(ip_addr=local_addr, port=local_port)
 
+    def _prepare_disconnect(self) -> None:
+        """Stop tunnel related tasks."""
+        self._cancel_invalid_sequence_number_reconnect_schedule()
+        super()._prepare_disconnect()
+
+    ####################
+    #
     # OUTGOING REQUESTS
+    #
+    ####################
 
     async def send_cemi(self, cemi: CEMIFrame) -> None:
         """
@@ -443,32 +533,44 @@ class UDPTunnel(_Tunnel):
         control endpoint.
         """
         raw_cemi = cemi.to_knx()
-        async with self._send_lock:
-            cemi_logger.debug("Outgoing CEMI: %s", cemi)
+        async with self._send_ready():
             try:
                 try:
                     await self._tunnelling_request(raw_cemi)
                 except TunnellingAckError as err:
-                    logger.debug("%s. Retrying a second time.", err)
+                    logger.debug("First TunnellingRequest try failed. %s", err)
                 else:
                     return
 
                 try:
                     await self._tunnelling_request(raw_cemi)
                 except TunnellingAckError as err:
-                    logger.debug("%s. Reconnecting tunnel.", err)
+                    logger.debug("Second TunnellingRequest try failed. %s", err)
                 else:
                     return
 
-                if self._reconnect_task is None or self._reconnect_task.done():
+                if self._reconnect_task is None:
                     self._tunnel_lost()
-                await self.xknx.connection_manager.connected.wait()
+                if self._reconnect_task is None:
+                    # _tunnel_lost() sets self._reconnect_task when auto-reconnect is True
+                    raise CommunicationError(
+                        "Sending TunnellingRequest failed twice. No reconnect.", True
+                    )
+                try:
+                    await self._reconnect_task
+                except asyncio.CancelledError:
+                    raise CommunicationError(
+                        "Sending TunnellingRequest failed twice. Reconnect was cancelled.",
+                        True,
+                    ) from None
+
                 try:
                     await self._tunnelling_request(raw_cemi)
                 except TunnellingAckError as err:
                     raise CommunicationError(
-                        f"Resending the telegram repeatedly failed. {err}", True
-                    )
+                        f"Third TunnellingRequest try failed after reconnect. {err}",
+                        True,
+                    ) from None
 
             finally:
                 self._increase_sequence_number()
@@ -495,7 +597,49 @@ class UDPTunnel(_Tunnel):
                 )
             raise TunnellingAckError(reason)
 
+    ####################
+    #
     # INCOMING REQUESTS
+    #
+    ####################
+
+    def _invalid_sequence_number_reconnect_schedule(
+        self,
+        seconds: int = 2,  # 2x ACK timeout
+    ) -> None:
+        """
+        Schedule a reconnect or disconnect when a TunnellingRequest with invalid sequence number was received.
+
+        To be canceled if a valid frame is received before the timeout.
+        """
+
+        async def _schedule_tunnel_lost() -> None:
+            await asyncio.sleep(seconds)
+            logger.warning(
+                "TunnellingRequest with expected sequence number %s was not received within %s seconds "
+                "after an unexpected sequence number was received. Closing tunnel connection.",
+                self.expected_sequence_number,
+                seconds,
+            )
+            # Clear the stored task reference before calling _tunnel_lost() so
+            # that the reconnect logic does not cancel this running task itself.
+            self._invalid_sequence_number_reconnect_task = None
+            self._tunnel_lost()
+
+        if (
+            self._invalid_sequence_number_reconnect_task is None
+            and self._reconnect_task is None
+        ):
+            self._invalid_sequence_number_reconnect_task = asyncio.create_task(
+                _schedule_tunnel_lost()
+            )
+
+    def _cancel_invalid_sequence_number_reconnect_schedule(self) -> None:
+        """Cancel scheduled reconnect or disconnect."""
+        if self._invalid_sequence_number_reconnect_task is not None:
+            self._invalid_sequence_number_reconnect_task.cancel()
+            self._invalid_sequence_number_reconnect_task = None
+            logger.debug("Canceled scheduled reconnect for invalid sequence number.")
 
     def _tunnelling_request_received(
         self, tunneling_request: TunnellingRequest
@@ -503,6 +647,9 @@ class UDPTunnel(_Tunnel):
         """Handle incoming tunnelling request."""
         if tunneling_request.sequence_counter == self.expected_sequence_number:
             self.expected_sequence_number = self.expected_sequence_number + 1 & 0xFF
+            # valid frame received - cancel scheduled reconnect for invalid sequence number
+            self._cancel_invalid_sequence_number_reconnect_schedule()
+
             self._send_tunnelling_ack(
                 tunneling_request.communication_channel_id,
                 tunneling_request.sequence_counter,
@@ -530,8 +677,10 @@ class UDPTunnel(_Tunnel):
             tunneling_request,
         )
         # Tunnelling server should repeat that frame and disconnect after that was also not ACKed.
-        # some don't seem to initiate disconnection here so we take a shortcut and disconnect ourselves
-        self._tunnel_lost()
+        # According to KNX specification we should just drop the frame.
+        # Some interfaces don't initiate a disconnect here so we take a shortcut and disconnect
+        # ourselves when we don't receive the expected frame after a short delay (mixed up frames?).
+        self._invalid_sequence_number_reconnect_schedule()
 
     def _send_tunnelling_ack(
         self, communication_channel_id: int, sequence_counter: int
@@ -549,17 +698,21 @@ class UDPTunnel(_Tunnel):
 class TCPTunnel(_Tunnel):
     """Class for handling KNX/IP TCP tunnels."""
 
+    __slots__ = ("gateway_ip", "gateway_port")
+
+    connection_type = XknxConnectionType.TUNNEL_TCP
     transport: TCPTransport
 
     def __init__(
         self,
         xknx: XKNX,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         gateway_ip: str,
         gateway_port: int,
+        individual_address: IndividualAddress | None = None,
         auto_reconnect: bool = True,
         auto_reconnect_wait: int = 3,
-    ):
+    ) -> None:
         """Initialize Tunnel class."""
         self.gateway_ip = gateway_ip
         self.gateway_port = gateway_port
@@ -571,6 +724,7 @@ class TCPTunnel(_Tunnel):
         )
         # TCP always uses 0.0.0.0:0
         self.local_hpai = HPAI(protocol=HostProtocol.IPV4_TCP)
+        self._requested_address = individual_address
 
     def _init_transport(self) -> None:
         """Initialize transport transport."""
@@ -590,12 +744,15 @@ class TCPTunnel(_Tunnel):
 class SecureTunnel(TCPTunnel):
     """Class for handling KNX/IP secure TCP tunnels."""
 
+    __slots__ = ("_device_authentication_password", "_user_id", "_user_password")
+
+    connection_type = XknxConnectionType.TUNNEL_SECURE
     transport: SecureSession
 
     def __init__(
         self,
         xknx: XKNX,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         gateway_ip: str,
         gateway_port: int,
         user_id: int,
@@ -603,7 +760,7 @@ class SecureTunnel(TCPTunnel):
         auto_reconnect: bool = True,
         auto_reconnect_wait: int = 3,
         device_authentication_password: str | None = None,
-    ):
+    ) -> None:
         """Initialize SecureTunnel class."""
         self._device_authentication_password = device_authentication_password
         self._user_id = user_id

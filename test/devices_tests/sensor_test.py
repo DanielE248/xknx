@@ -1,5 +1,6 @@
 """Unit test for Sensor objects."""
-from unittest.mock import AsyncMock
+
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,7 +15,7 @@ class TestSensor:
     """Test class for Sensor objects."""
 
     @pytest.mark.parametrize(
-        "value_type,raw_payload,expected_state",
+        ("value_type", "raw_payload", "expected_state"),
         [
             # DPT-14 values are according to ETS group monitor values
             (
@@ -415,7 +416,7 @@ class TestSensor:
             (
                 "percentV16",
                 DPTArray((0x8A, 0x2F)),
-                -30161,
+                -301.61,
             ),
             (
                 "phaseanglerad",
@@ -590,12 +591,12 @@ class TestSensor:
             (
                 "time_period_100msec",
                 DPTArray((0x6A, 0x35)),
-                27189,
+                2718900,
             ),
             (
                 "time_period_10msec",
                 DPTArray((0x32, 0x3)),
-                12803,
+                128030,
             ),
             (
                 "time_period_hrs",
@@ -671,10 +672,10 @@ class TestSensor:
     )
     async def test_sensor_value_types(
         self,
-        value_type,
-        raw_payload,
-        expected_state,
-    ):
+        value_type: str,
+        raw_payload: DPTArray,
+        expected_state: float,
+    ) -> None:
         """Test sensor value types."""
         xknx = XKNX()
         sensor = Sensor(
@@ -683,7 +684,7 @@ class TestSensor:
             group_address_state="1/2/3",
             value_type=value_type,
         )
-        await sensor.process(
+        sensor.process(
             Telegram(
                 destination_address=GroupAddress("1/2/3"),
                 payload=GroupValueWrite(value=raw_payload),
@@ -692,7 +693,7 @@ class TestSensor:
 
         assert sensor.resolve_state() == expected_state
 
-    async def test_always_callback_sensor(self):
+    async def test_always_callback_sensor(self) -> None:
         """Test always callback sensor."""
         xknx = XKNX()
         sensor = Sensor(
@@ -702,7 +703,7 @@ class TestSensor:
             always_callback=False,
             value_type="volume_liquid_litre",
         )
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         sensor.register_device_updated_cb(after_update_callback)
         payload = DPTArray((0x00, 0x00, 0x01, 0x00))
         #  set initial payload of sensor
@@ -715,24 +716,29 @@ class TestSensor:
             payload=GroupValueResponse(payload),
         )
         # verify not called when always_callback is False
-        await sensor.process(telegram)
+        sensor.process(telegram)
+        after_update_callback.assert_not_called()
+        after_update_callback.reset_mock()
+
+        # verify not called when processing read responses
+        sensor.process(response_telegram)
         after_update_callback.assert_not_called()
         after_update_callback.reset_mock()
 
         sensor.always_callback = True
         # verify called when always_callback is True
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_called_once()
         after_update_callback.reset_mock()
 
-        # verify not called when processing read responses
-        await sensor.process(response_telegram)
-        after_update_callback.assert_not_called()
+        # verify called when processing read responses
+        sensor.process(response_telegram)
+        after_update_callback.assert_called_once()
 
     #
     # SYNC
     #
-    async def test_sync(self):
+    async def test_sync(self) -> None:
         """Test sync function / sending group reads to KNX bus."""
         xknx = XKNX()
         sensor = Sensor(
@@ -748,7 +754,7 @@ class TestSensor:
     #
     # HAS GROUP ADDRESS
     #
-    def test_has_group_address(self):
+    def test_has_group_address(self) -> None:
         """Test sensor has group address."""
         xknx = XKNX()
         sensor = Sensor(
@@ -760,7 +766,7 @@ class TestSensor:
     #
     # TEST PROCESS
     #
-    async def test_process(self):
+    async def test_process(self) -> None:
         """Test process / reading telegrams from telegram queue."""
         xknx = XKNX()
         sensor = Sensor(
@@ -771,27 +777,27 @@ class TestSensor:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x06, 0xA0))),
         )
-        await sensor.process(telegram)
+        sensor.process(telegram)
         assert sensor.sensor_value.value == 16.96
         assert sensor.sensor_value.telegram.payload.value == DPTArray((0x06, 0xA0))
         assert sensor.resolve_state() == 16.96
         # test HomeAssistant device class
         assert sensor.ha_device_class() == "temperature"
 
-    async def test_process_callback(self):
+    async def test_process_callback(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if callback is called."""
 
         xknx = XKNX()
         sensor = Sensor(
             xknx, "TestSensor", group_address_state="1/2/3", value_type="temperature"
         )
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         sensor.register_device_updated_cb(after_update_callback)
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x01, 0x02))),
         )
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_called_with(sensor)
         assert sensor.last_telegram == telegram

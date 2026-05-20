@@ -1,6 +1,8 @@
 """Module for XKXN Exceptions."""
+
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 
@@ -47,7 +49,8 @@ class USBDeviceNotFoundError(XKNXException):
     def __str__(self) -> str:
         """ """
         return self.message
-
+class IPSecureError(CommunicationError):
+    """Error in IP Secure communication."""
 
 class CouldNotParseTelegram(XKNXException):
     """Could not parse telegram error."""
@@ -60,7 +63,7 @@ class CouldNotParseTelegram(XKNXException):
 
     def _format_parameter(self) -> str:
         return " ".join(
-            [f'{key}="{value}"' for (key, value) in sorted(self.parameter.items())]
+            [f"{key}={value!r}" for (key, value) in sorted(self.parameter.items())]
         )
 
     def __str__(self) -> str:
@@ -105,6 +108,19 @@ class IncompleteKNXIPFrame(CouldNotParseKNXIP):
         return f'<IncompleteKNXIPFrame description="{self.description}" />'
 
 
+class CouldNotParseCEMI(XKNXException):
+    """Exception class for wrong CEMI data."""
+
+    def __init__(self, description: str = "") -> None:
+        """Initialize CouldNotParseCEMI class."""
+        super().__init__()
+        self.description = description
+
+    def __str__(self) -> str:
+        """Return object as readable string."""
+        return f'<CouldNotParseCEMI description="{self.description}" />'
+
+
 class UnsupportedCEMIMessage(XKNXException):
     """Exception class for unsupported CEMI Messages."""
 
@@ -129,7 +145,7 @@ class ConversionError(XKNXException):
 
     def _format_parameter(self) -> str:
         return " ".join(
-            [f'{key}="{value}"' for (key, value) in sorted(self.parameter.items())]
+            [f"{key}={value!r}" for (key, value) in sorted(self.parameter.items())]
         )
 
     def __str__(self) -> str:
@@ -140,22 +156,22 @@ class ConversionError(XKNXException):
 class CouldNotParseAddress(XKNXException):
     """Exception class for wrong address format."""
 
-    def __init__(
-        self, address: object | str | tuple[Any, ...] | int | None = None
-    ) -> None:
+    def __init__(self, address: Any = None, message: str = "") -> None:
         """Initialize CouldNotParseAddress class."""
         super().__init__()
         self.address = address
+        self.message = message
 
     def __str__(self) -> str:
         """Return object as readable string."""
-        return f'<CouldNotParseAddress address="{self.address}" />'
+        _msg = f'message="{self.message}" ' if self.message else ""
+        return f"<CouldNotParseAddress address={self.address!r} {_msg}/>"
 
 
 class DeviceIllegalValue(XKNXException):
     """Exception class for setting a value of a device with an illegal value."""
 
-    def __init__(self, value: Any, description: str) -> None:
+    def __init__(self, description: str, value: Any) -> None:
         """Initialize DeviceIllegalValue class."""
         super().__init__()
         self.value = value
@@ -163,18 +179,19 @@ class DeviceIllegalValue(XKNXException):
 
     def __str__(self) -> str:
         """Return object as readable string."""
-        return f'<DeviceIllegalValue description="{self.value}" value="{self.description}" />'
+        return f'<DeviceIllegalValue description="{self.description}" value={self.value!r} />'
 
 
 class DataSecureError(XKNXException):
     """Exception class for KNX Data Secure handling."""
 
+    def __init__(self, message: str, log_level: int = logging.WARNING) -> None:
+        """Instantiate exception."""
+        super().__init__(message)
+        self.log_level = log_level
 
-class SecureException(XKNXException):
-    """Exception class for IP secure handling."""
 
-
-class InvalidSecureConfiguration(SecureException):
+class InvalidSecureConfiguration(XKNXException):
     """Exception class used when the secure configuration is invalid."""
 
 

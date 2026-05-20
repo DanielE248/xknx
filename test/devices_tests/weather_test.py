@@ -1,5 +1,8 @@
 """Unit test for Weather objects."""
+
 import datetime
+
+import pytest
 
 from xknx import XKNX
 from xknx.devices import Weather
@@ -12,12 +15,12 @@ from xknx.telegram.apci import GroupValueWrite
 class TestWeather:
     """Test class for Weather objects."""
 
-    async def test_temperature(self):
+    async def test_temperature(self) -> None:
         """Test resolve state with temperature."""
         xknx = XKNX()
         weather = Weather(name="weather", xknx=xknx, group_address_temperature="1/3/4")
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/4"),
                 payload=GroupValueWrite(value=DPTArray((0x19, 0xA))),
@@ -29,7 +32,7 @@ class TestWeather:
         assert weather._temperature.unit_of_measurement == "°C"
         assert weather._temperature.ha_device_class == "temperature"
 
-    async def test_brightness(self):
+    async def test_brightness(self) -> None:
         """Test resolve state for brightness east, west and south."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -42,28 +45,28 @@ class TestWeather:
             group_address_temperature="1/4/4",
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/5"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5E))),
             )
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/7"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5C))),
             )
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/6"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5A))),
             )
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/8"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5A))),
@@ -86,46 +89,53 @@ class TestWeather:
         assert weather._brightness_north.unit_of_measurement == "lx"
         assert weather._brightness_north.ha_device_class == "illuminance"
 
-    async def test_pressure(self):
-        """Test resolve state with pressure."""
+    @pytest.mark.parametrize(
+        ("value", "payload"),
+        [
+            (98631.68, DPTArray((0x6C, 0xB4))),  # 2byte float
+            (98631.68, DPTArray((0x47, 0xC0, 0xA3, 0xD7))),  # 4byte float
+        ],
+    )
+    async def test_pressure(self, value: float, payload: DPTArray) -> None:
+        """Test air pressure telegram."""
         xknx = XKNX()
         weather = Weather(name="weather", xknx=xknx, group_address_air_pressure="1/3/4")
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/4"),
-                payload=GroupValueWrite(value=DPTArray((0x6C, 0xAD))),
+                payload=GroupValueWrite(value=payload),
             )
         )
 
-        assert weather.air_pressure == 98058.24
+        assert weather.air_pressure == value
         assert weather._air_pressure.unit_of_measurement == "Pa"
         assert weather._air_pressure.ha_device_class == "pressure"
 
-    async def test_humidity(self):
-        """Test humidity."""
+    async def test_humidity(self) -> None:
+        """Test humidity telegram."""
         xknx = XKNX()
         weather = Weather(name="weather", xknx=xknx, group_address_humidity="1/2/4")
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/2/4"),
-                payload=GroupValueWrite(value=DPTArray((0x7E, 0xE1))),
+                payload=GroupValueWrite(value=DPTArray((0x15, 0x73))),
             )
         )
 
-        assert weather.humidity == 577044.48
+        assert weather.humidity == 55.8
         assert weather._humidity.unit_of_measurement == "%"
         assert weather._humidity.ha_device_class == "humidity"
 
-    async def test_wind_speed(self):
+    async def test_wind_speed(self) -> None:
         """Test wind speed received."""
         xknx = XKNX()
         weather: Weather = Weather(
             name="weather", xknx=xknx, group_address_wind_speed="1/3/8"
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/8"),
                 payload=GroupValueWrite(value=DPTArray((0x7D, 0x98))),
@@ -134,16 +144,16 @@ class TestWeather:
 
         assert weather.wind_speed == 469237.76
         assert weather._wind_speed.unit_of_measurement == "m/s"
-        assert weather._wind_speed.ha_device_class is None
+        assert weather._wind_speed.ha_device_class == "wind_speed"
 
-    async def test_wind_bearing(self):
+    async def test_wind_bearing(self) -> None:
         """Test wind bearing received."""
         xknx = XKNX()
         weather: Weather = Weather(
             name="weather", xknx=xknx, group_address_wind_bearing="1/3/8"
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/8"),
                 payload=GroupValueWrite(value=DPTArray((0xBF,))),
@@ -154,7 +164,7 @@ class TestWeather:
         assert weather._wind_bearing.unit_of_measurement == "°"
         assert weather._wind_bearing.ha_device_class is None
 
-    def test_state_lightning(self):
+    def test_state_lightning(self) -> None:
         """Test current_state returns lightning if wind alarm and rain alarm are true."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -169,7 +179,7 @@ class TestWeather:
 
         assert weather.ha_current_state() == WeatherCondition.LIGHTNING_RAINY
 
-    def test_state_snowy_rainy(self):
+    def test_state_snowy_rainy(self) -> None:
         """Test snow rain if frost alarm and rain alarm are true."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -184,7 +194,7 @@ class TestWeather:
 
         assert weather.ha_current_state() == WeatherCondition.SNOWY_RAINY
 
-    def test_wind_alarm(self):
+    def test_wind_alarm(self) -> None:
         """Test basic state mapping."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -199,7 +209,7 @@ class TestWeather:
 
         assert weather.ha_current_state() == WeatherCondition.WINDY
 
-    def test_rain_alarm(self):
+    def test_rain_alarm(self) -> None:
         """Test basic state mapping."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -214,7 +224,7 @@ class TestWeather:
 
         assert weather.ha_current_state() == WeatherCondition.RAINY
 
-    async def test_cloudy_summer(self):
+    async def test_cloudy_summer(self) -> None:
         """Test cloudy summer if illuminance matches defined interval."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -224,7 +234,7 @@ class TestWeather:
             group_address_brightness_south="1/3/6",
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/6"),
                 payload=GroupValueWrite(value=DPTArray((0x46, 0x45))),
@@ -238,7 +248,7 @@ class TestWeather:
             == WeatherCondition.CLOUDY
         )
 
-    async def test_sunny_summer(self):
+    async def test_sunny_summer(self) -> None:
         """Test returns sunny condition if illuminance is in defined interval."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -249,7 +259,7 @@ class TestWeather:
             group_address_brightness_west="1/3/7",
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/6"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5C))),
@@ -262,7 +272,7 @@ class TestWeather:
             weather.ha_current_state(current_date=summer_date) == WeatherCondition.SUNNY
         )
 
-    async def test_sunny_winter(self):
+    async def test_sunny_winter(self) -> None:
         """Test sunny winter if illuminance matches defined interval."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -272,7 +282,7 @@ class TestWeather:
             group_address_brightness_west="1/3/7",
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/6"),
                 payload=GroupValueWrite(value=DPTArray((0x7C, 0x5C))),
@@ -285,7 +295,7 @@ class TestWeather:
             weather.ha_current_state(current_date=winter_date) == WeatherCondition.SUNNY
         )
 
-    async def test_cloudy_winter(self):
+    async def test_cloudy_winter(self) -> None:
         """Test cloudy winter if illuminance matches defined interval."""
         xknx = XKNX()
         weather: Weather = Weather(
@@ -296,7 +306,7 @@ class TestWeather:
             group_address_brightness_west="1/3/7",
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/6"),
                 payload=GroupValueWrite(value=DPTArray((0x46, 0x45))),
@@ -310,23 +320,31 @@ class TestWeather:
             == WeatherCondition.CLOUDY
         )
 
-    async def test_day_night(self):
+    @pytest.mark.parametrize("invert_day_night", [False, True])
+    async def test_day_night(self, invert_day_night: bool) -> None:
         """Test day night mapping."""
         xknx = XKNX()
         weather: Weather = Weather(
-            name="weather", xknx=xknx, group_address_day_night="1/3/20"
+            name="weather",
+            xknx=xknx,
+            group_address_day_night="1/3/20",
+            invert_day_night=invert_day_night,
         )
 
-        await weather.process(
+        weather.process(
             Telegram(
                 destination_address=GroupAddress("1/3/20"),
                 payload=GroupValueWrite(value=DPTBinary(0)),
             )
         )
+        if invert_day_night:
+            assert weather.ha_current_state() == WeatherCondition.EXCEPTIONAL
+            assert weather.day_night is True
+        else:
+            assert weather.ha_current_state() == WeatherCondition.CLEAR_NIGHT
+            assert weather.day_night is False
 
-        assert weather.ha_current_state() == WeatherCondition.CLEAR_NIGHT
-
-    def test_weather_default(self):
+    def test_weather_default(self) -> None:
         """Test default state mapping."""
         xknx = XKNX()
         weather: Weather = Weather(name="weather", xknx=xknx)
@@ -336,7 +354,7 @@ class TestWeather:
     #
     # GENERATOR _iter_remote_values
     #
-    def test_iter_remote_values(self):
+    def test_iter_remote_values(self) -> None:
         """Test sensor has group address."""
         xknx = XKNX()
         weather = Weather(
@@ -354,9 +372,9 @@ class TestWeather:
     #
     # HAS GROUP ADDRESS
     #
-    def test_has_group_address(self):
+    def test_has_group_address(self) -> None:
         """Test sensor has group address."""
         xknx = XKNX()
         weather = Weather(name="weather", xknx=xknx, group_address_temperature="1/3/4")
-        assert weather._temperature.has_group_address(GroupAddress("1/3/4"))
-        assert not weather._temperature.has_group_address(GroupAddress("1/2/4"))
+        assert weather.has_group_address(GroupAddress("1/3/4"))
+        assert not weather.has_group_address(GroupAddress("1/2/4"))

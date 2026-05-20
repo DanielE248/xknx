@@ -3,11 +3,12 @@ TCPTransport is an abstraction for handling the complete TCP io.
 
 The module is build upon asyncio stream socket functions.
 """
+
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
-from typing import Callable, cast
 
 from xknx.exceptions import CommunicationError, CouldNotParseKNXIP, IncompleteKNXIPFrame
 from xknx.knxip import HPAI, HostProtocol, KNXIPFrame
@@ -25,15 +26,30 @@ class TCPTransport(KNXIPTransport):
     class TCPTransportFactory(asyncio.Protocol):
         """Abstraction for managing the asyncio-tcp protocol."""
 
+        __slots__ = ("connection_lost_callback", "data_received_callback", "transport")
+
         def __init__(
             self,
             data_received_callback: Callable[[bytes], None],
             connection_lost_callback: Callable[[], None],
-        ):
+        ) -> None:
             """Initialize UDPTransportFactory class."""
             self.transport: asyncio.BaseTransport | None = None
             self.data_received_callback = data_received_callback
             self.connection_lost_callback = connection_lost_callback
+
+            # Workaround for issue of TCP Transport in ProactorEventLoop in py3.10 and py3.11
+            # on Windows returning bytearray instead of bytes which lead to errors in
+            # cryptography (eg. X25519PublicKey.from_public_bytes() in IP Secure handshake)
+            # https://github.com/python/cpython/issues/99941
+            try:
+                if isinstance(asyncio.get_event_loop(), asyncio.ProactorEventLoop):  # type: ignore[attr-defined, unused-ignore] # unused-ignore for Windows
+                    self.data_received_callback = lambda data: data_received_callback(
+                        bytes(data)
+                    )
+            except AttributeError:
+                # asyncio.ProactorEventLoop is only available on Windows
+                pass
 
         def connection_made(self, transport: asyncio.BaseTransport) -> None:
             """Assign transport. Callback after udp connection was made."""
@@ -49,11 +65,13 @@ class TCPTransport(KNXIPTransport):
             logger.debug("Closing TCP transport. %s", exc)
             self.connection_lost_callback()
 
+    __slots__ = ("_buffer", "_connection_lost_cb", "remote_hpai")
+
     def __init__(
         self,
         remote_addr: tuple[str, int],
         connection_lost_cb: Callable[[], None] | None = None,
-    ):
+    ) -> None:
         """Initialize TCPTransport class."""
         self.remote_addr = remote_addr
         self.remote_hpai = HPAI(*remote_addr, protocol=HostProtocol.IPV4_TCP)
@@ -103,13 +121,11 @@ class TCPTransport(KNXIPTransport):
             connection_lost_callback=self._connection_lost,
         )
         loop = asyncio.get_running_loop()
-        (transport, _) = await loop.create_connection(
+        (self.transport, _) = await loop.create_connection(
             lambda: tcp_transport_factory,
             host=self.remote_hpai.ip_addr,
             port=self.remote_hpai.port,
         )
-        # TODO: typing - remove cast - loop.create_connection should return a asyncio.Transport
-        self.transport = cast(asyncio.Transport, transport)
 
     def _connection_lost(self) -> None:
         """Call assigned callback. Callback for connection lost."""

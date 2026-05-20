@@ -4,6 +4,7 @@ Module for Serialization and Deserialization of a KNX Connectionstate Response i
 Connectionstate requests are used to determine if a tunnel connection is still active and valid.
 With a connectionstate response the receiving party acknowledges the valid processing of the request.
 """
+
 from __future__ import annotations
 
 from xknx.exceptions import CouldNotParseKNXIP
@@ -23,7 +24,7 @@ class ConnectionStateResponse(KNXIPBodyResponse):
         self,
         communication_channel_id: int = 1,
         status_code: ErrorCode = ErrorCode.E_NO_ERROR,
-    ):
+    ) -> None:
         """Initialize ConnectionStateResponse object."""
         self.communication_channel_id = communication_channel_id
         self.status_code = status_code

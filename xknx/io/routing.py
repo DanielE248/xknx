@@ -3,6 +3,7 @@ Abstraction for handling KNXnet/IP routing.
 
 Routing uses UDP Multicast to send and receive KNXnet/IP messages.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,8 +14,8 @@ import random
 from typing import TYPE_CHECKING, Final
 
 from xknx.cemi import CEMIFrame, CEMIMessageCode
-from xknx.core import XknxConnectionState
-from xknx.exceptions import CommunicationError, UnsupportedCEMIMessage
+from xknx.core import XknxConnectionState, XknxConnectionType
+from xknx.exceptions import CommunicationError
 from xknx.knxip import (
     HPAI,
     KNXIPFrame,
@@ -26,7 +27,7 @@ from xknx.knxip import (
 from xknx.telegram import IndividualAddress
 
 from .const import DEFAULT_INDIVIDUAL_ADDRESS, DEFAULT_MCAST_GRP, DEFAULT_MCAST_PORT
-from .interface import CEMICallbackType, Interface
+from .interface import CEMIBytesCallbackType, Interface
 from .ip_secure import SecureGroup
 from .transport import KNXIPTransport, UDPTransport
 
@@ -34,7 +35,6 @@ if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 logger = logging.getLogger("xknx.log")
-cemi_logger = logging.getLogger("xknx.cemi")
 
 BUSY_DECREMENT_TIME: Final = 0.005  # 5 ms
 BUSY_INCREMENT_COOLDOWN: Final = 0.01  # 10 ms
@@ -47,10 +47,21 @@ DEFAULT_LATENCY_TOLERANCE_MS: Final = 1000
 
 class _RoutingFlowControl:
     """
-    Class for hanling KNXnet/IP routing flow control.
+    Class for handling KNXnet/IP routing flow control.
 
     See KNX Specifications 3.8.5 Routing §2.3.5 Flow control handling
     """
+
+    __slots__ = (
+        "_last_busy_frame_time",
+        "_last_sent_routing_indication_time",
+        "_loop",
+        "_ready",
+        "_received_busy_frames",
+        "_timer_task",
+        "_wait_start_time",
+        "_wait_time_ms",
+    )
 
     def __init__(self) -> None:
         self._last_busy_frame_time: float = 0.0
@@ -104,7 +115,8 @@ class _RoutingFlowControl:
                 self._received_busy_frames,
             )
             # discard frame if wait time is lower than remaining time
-            remaining_ms = (now - self._wait_start_time) * 1000
+            elapsed_ms = (now - self._wait_start_time) * 1000
+            remaining_ms = self._wait_time_ms - elapsed_ms
             if remaining_ms >= routing_busy.wait_time:
                 return
         self._wait_time_ms = routing_busy.wait_time
@@ -133,17 +145,28 @@ class _RoutingFlowControl:
 class Routing(Interface):
     """Class for handling KNXnet/IP multicast communication."""
 
+    __slots__ = (
+        "_flow_control",
+        "cemi_received_callback",
+        "individual_address",
+        "local_ip",
+        "multicast_group",
+        "multicast_port",
+        "xknx",
+    )
+
+    connection_type = XknxConnectionType.ROUTING
     transport: UDPTransport
 
     def __init__(
         self,
         xknx: XKNX,
         individual_address: IndividualAddress | None,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         local_ip: str,
         multicast_group: str = DEFAULT_MCAST_GRP,
         multicast_port: int = DEFAULT_MCAST_PORT,
-    ):
+    ) -> None:
         """Initialize Routing class."""
         self.xknx = xknx
         self.individual_address = individual_address or DEFAULT_INDIVIDUAL_ADDRESS
@@ -177,11 +200,11 @@ class Routing(Interface):
     #
     ####################
 
-    async def connect(self) -> bool:
+    async def connect(self) -> None:
         """Start routing."""
         self.xknx.current_address = self.individual_address
-        await self.xknx.connection_manager.connection_state_changed(
-            XknxConnectionState.CONNECTING
+        self.xknx.connection_manager.connection_state_changed(
+            XknxConnectionState.CONNECTING, self.connection_type
         )
         try:
             await self.transport.connect()
@@ -191,21 +214,20 @@ class Routing(Interface):
                 type(ex).__name__,
                 ex,
             )
-            await self.xknx.connection_manager.connection_state_changed(
+            self.xknx.connection_manager.connection_state_changed(
                 XknxConnectionState.DISCONNECTED
             )
             # close udp transport to prevent open file descriptors
             self.transport.stop()
             raise CommunicationError("Routing could not be started") from ex
-        await self.xknx.connection_manager.connection_state_changed(
-            XknxConnectionState.CONNECTED
+        self.xknx.connection_manager.connection_state_changed(
+            XknxConnectionState.CONNECTED, self.connection_type
         )
-        return True
 
     async def disconnect(self) -> None:
         """Stop routing."""
         self.transport.stop()
-        await self.xknx.connection_manager.connection_state_changed(
+        self.xknx.connection_manager.connection_state_changed(
             XknxConnectionState.DISCONNECTED
         )
         self._flow_control.cancel()
@@ -226,7 +248,7 @@ class Routing(Interface):
             self._send_knxipframe(KNXIPFrame.init_from_body(routing_indication))
 
         cemi.code = CEMIMessageCode.L_DATA_CON
-        self.cemi_received_callback(cemi)
+        self.cemi_received_callback(cemi.to_knx())
 
     def _send_knxipframe(self, knxipframe: KNXIPFrame) -> None:
         """Send KNXIPFrame to connected routing device."""
@@ -257,33 +279,31 @@ class Routing(Interface):
 
     def _handle_routing_indication(self, routing_indication: RoutingIndication) -> None:
         """Handle incoming RoutingIndication."""
-        try:
-            cemi = CEMIFrame.from_knx(routing_indication.raw_cemi)
-        except UnsupportedCEMIMessage as unsupported_cemi_err:
-            logger.warning("CEMI not supported: %s", unsupported_cemi_err)
-            return
-        if cemi.src_addr == self.individual_address:
-            logger.debug("Ignoring own packet %s", cemi)
-            return
-        self.cemi_received_callback(cemi)
+        self.cemi_received_callback(routing_indication.raw_cemi)
 
 
 class SecureRouting(Routing):
     """Class for handling KNXnet/IP secure multicast communication."""
 
+    __slots__ = (
+        "backbone_key",
+        "latency_ms",
+    )
+
+    connection_type = XknxConnectionType.ROUTING_SECURE
     transport: SecureGroup
 
     def __init__(
         self,
         xknx: XKNX,
         individual_address: IndividualAddress | None,
-        cemi_received_callback: CEMICallbackType,
+        cemi_received_callback: CEMIBytesCallbackType,
         local_ip: str,
         backbone_key: bytes,
         latency_ms: int | None = None,
         multicast_group: str = DEFAULT_MCAST_GRP,
         multicast_port: int = DEFAULT_MCAST_PORT,
-    ):
+    ) -> None:
         """Initialize SecureRouting class."""
         self.backbone_key = backbone_key
         self.latency_ms = latency_ms or DEFAULT_LATENCY_TOLERANCE_MS

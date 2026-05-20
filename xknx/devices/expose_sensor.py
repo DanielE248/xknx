@@ -7,22 +7,25 @@ It provides functionality for
 * KNX devices may read local values via GROUP READ.
 
 (A typical example for using this class is the outside temperature
-read from e.g. an internet serviceand exposed to ths KNX bus.
+read from e.g. an internet serviceand exposed to the KNX bus.
 KNX devices may show this value within their display.)
 """
+
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from xknx.core import Task
+from xknx.dpt import DPTArray, DPTBase, DPTBinary
 from xknx.remote_value import (
     GroupAddressesType,
     RemoteValue,
     RemoteValueSensor,
     RemoteValueSwitch,
 )
+from xknx.telegram import TelegramDirection
+from xknx.typing import DPTParsable
 
 from .device import Device, DeviceCallbackType
 
@@ -38,15 +41,33 @@ class ExposeSensor(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
         respond_to_read: bool = True,
-        value_type: int | str | None = None,
+        value_type: DPTParsable | type[DPTBase] | None = None,
         cooldown: float = 0,
+        periodic_send: float = 0,
         device_updated_cb: DeviceCallbackType[ExposeSensor] | None = None,
-    ):
-        """Initialize Sensor class."""
+    ) -> None:
+        """
+        Initialize ExposeSensor class.
+
+        Args:
+        xknx: XKNX instance to use for communication.
+        name: Name of the device.
+        group_address: KNX group address to send the value to.
+        respond_to_read: If True, respond to GroupValueRead telegrams with the
+            current value.
+        value_type: DPT type or identifier used to encode the sensor value.
+        cooldown: Minimum time in seconds between sending values to the KNX
+            bus. If multiple updates occur during this period, only the last
+            value is sent when the cooldown ends. ``0`` (default) disables cooldown.
+        periodic_send: Interval in seconds for automatically re-sending the
+            current value. A value of ``0`` (default) disables periodic sending.
+        device_updated_cb: Callback invoked when the device has been
+            updated.
+
+        """
         super().__init__(xknx, name, device_updated_cb)
-        self.cooldown = cooldown
         self.respond_to_read = respond_to_read
         self.sensor_value: RemoteValueSensor | RemoteValueSwitch
         if value_type == "binary":
@@ -66,55 +87,106 @@ class ExposeSensor(Device):
                 after_update_cb=self.after_update,
                 value_type=value_type,
             )
-        self._cooldown_latest_value: Any | None = None
-        self._cooldown_task: Task | None = None
-        self._cooldown_task_name = f"expose_sensor.cooldown_{id(self)}"
+        # the next payload to be sent after cooldown or the last sent payload
+        self._payload_after_cooldown: DPTArray | DPTBinary | None = None
+        self._cooldown_task = (
+            Task(
+                name=f"expose_sensor.cooldown_{id(self)}",
+                target=self._cooldown_send,
+                wait_before_start=cooldown,
+                wait_for_connection=True,
+                repeat_after=0,  # canceled after 1 iteration in _cooldown_send if no new value
+            )
+            if cooldown and cooldown > 0
+            else None
+        )
+        self._periodic_send_task: Task | None = (
+            Task(
+                name=f"expose_sensor.periodic_send_{id(self)}",
+                target=self._periodic_send_impl,
+                restart_after_reconnect=True,
+                wait_before_start=periodic_send,
+                repeat_after=0,
+            )
+            if periodic_send and periodic_send > 0
+            else None
+        )
 
-    async def after_update(self) -> None:
-        """Call after state was updated."""
-        self._cooldown_latest_value = self.sensor_value.value
-        await super().after_update()
-
-    def _iter_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices RemoteValue classes."""
         yield self.sensor_value
 
-    def _iter_tasks(self) -> Iterator[Task | None]:
-        """Iterate the device tasks."""
-        yield self._cooldown_task
+    def async_start_tasks(self) -> None:
+        """Start async background tasks of device."""
+        if self._periodic_send_task is not None:
+            self.xknx.task_registry.start_task(self._periodic_send_task)
 
-    async def process_group_write(self, telegram: Telegram) -> None:
+    def async_remove_tasks(self) -> None:
+        """Remove async tasks of device."""
+        if self._cooldown_task is not None:
+            self.xknx.task_registry.remove_task(self._cooldown_task)
+            self._cooldown_task = None
+        if self._periodic_send_task is not None:
+            self.xknx.task_registry.remove_task(self._periodic_send_task)
+            self._periodic_send_task = None
+
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
-        await self.sensor_value.process(telegram)
+        self.sensor_value.process(telegram)
+        # reset periodic send timer
+        if (
+            telegram.direction is TelegramDirection.OUTGOING
+            and self._periodic_send_task is not None
+        ):
+            self._periodic_send_task.restart()
 
-    async def process_group_read(self, telegram: Telegram) -> None:
+    def process_group_read(self, telegram: Telegram) -> None:
         """Process incoming GROUP READ telegram."""
         if not self.respond_to_read:
             return
-        if self._cooldown_latest_value is not None:
-            await self.sensor_value.set(self._cooldown_latest_value, response=True)
+        if self._payload_after_cooldown is not None:
+            # reading shall not be affected by cooldown, but restart the timer
+            self.sensor_value.send_raw(self._payload_after_cooldown, response=True)
+            self._restart_cooldown()
             return
-        await self.sensor_value.respond()
+        self.sensor_value.respond()
 
-    async def set(self, value: Any) -> None:
-        """Set new value."""
-        if self.cooldown:
-            self._cooldown_latest_value = value
-            if self._cooldown_task is not None and not self._cooldown_task.done():
+    async def set(self, value: Any, skip_unchanged: bool = False) -> None:
+        """
+        Set new value.
+
+        Set `skip_unchanged` to skip sending when the encoded payload matches the last one.
+        """
+        payload = self.sensor_value.to_knx(value)
+        if skip_unchanged and self._payload_after_cooldown == payload:
+            return
+        self._payload_after_cooldown = payload
+
+        if self._cooldown_task is not None:
+            if not self._cooldown_task.done():
                 return
-            self._cooldown_task = self.xknx.task_registry.register(
-                name=self._cooldown_task_name,
-                async_func=self._cooldown_wait,
-            ).start()
-        await self.sensor_value.set(value)
+            self.xknx.task_registry.start_task(self._cooldown_task)
+        self.sensor_value.send_raw(payload)
 
-    async def _cooldown_wait(self) -> None:
+    async def _cooldown_send(self) -> None:
         """Send value after cooldown if it differs from last processed value."""
-        while True:
-            await asyncio.sleep(self.cooldown)
-            if self.sensor_value.value == self._cooldown_latest_value:
-                break
-            await self.sensor_value.set(self._cooldown_latest_value)  # type: ignore[arg-type]
+        if self.sensor_value.last_payload == self._payload_after_cooldown:
+            # cancel cooldown task to break internal loop
+            self._cooldown_task.cancel()  # type: ignore[union-attr]
+            return
+        self.sensor_value.send_raw(self._payload_after_cooldown)  # type: ignore[arg-type]
+
+    def _restart_cooldown(self) -> None:
+        """Reset cooldown task."""
+        if self._cooldown_task is None:
+            return
+        self.xknx.task_registry.start_task(self._cooldown_task)
+
+    async def _periodic_send_impl(self) -> None:
+        """Endless loop for periodic sending of sensor value."""
+        if self._payload_after_cooldown is not None:
+            self.sensor_value.send_raw(self._payload_after_cooldown)
+            self._restart_cooldown()
 
     def unit_of_measurement(self) -> str | None:
         """Return the unit of measurement."""
@@ -129,6 +201,6 @@ class ExposeSensor(Device):
         return (
             f'<ExposeSensor name="{self.name}" '
             f"sensor={self.sensor_value.group_addr_str()} "
-            f"value={repr(self.sensor_value.value)} "
+            f"value={self.sensor_value.value!r} "
             f'unit="{self.unit_of_measurement()}"/>'
         )

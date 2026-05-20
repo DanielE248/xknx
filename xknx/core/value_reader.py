@@ -2,11 +2,12 @@
 Module for reading the value of a specific KNX group address from KNX bus.
 
 The module will
-* ... send a group_read to the selected gruop address.
+* ... send a group_read to the selected group address.
 * ... register a callback for receiving telegrams within telegram queue.
 * ... check if received telegrams have the correct group address.
 * ... store the received telegram for further processing.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress, InternalGroupAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
+from xknx.util import asyncio_timeout
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
@@ -26,12 +28,20 @@ logger = logging.getLogger("xknx.log")
 class ValueReader:
     """Class for reading the value of a specific KNX group address from KNX bus."""
 
+    __slots__ = (
+        "group_address",
+        "received_telegram",
+        "response_received_event",
+        "timeout_in_seconds",
+        "xknx",
+    )
+
     def __init__(
         self,
         xknx: XKNX,
         group_address: GroupAddress | InternalGroupAddress,
         timeout_in_seconds: float = 2.0,
-    ):
+    ) -> None:
         """Initialize ValueReader class."""
         self.xknx = xknx
         self.group_address: GroupAddress | InternalGroupAddress = group_address
@@ -46,13 +56,11 @@ class ValueReader:
             group_addresses=[self.group_address],
             match_for_outgoing=True,
         )
-        await self.send_group_read()
+        self.send_group_read()
 
         try:
-            await asyncio.wait_for(
-                self.response_received_event.wait(),
-                timeout=self.timeout_in_seconds,
-            )
+            async with asyncio_timeout(self.timeout_in_seconds):
+                await self.response_received_event.wait()
         except asyncio.TimeoutError:
             logger.warning(
                 "Error: KNX bus did not respond in time (%s secs) to GroupValueRead request for: %s",
@@ -67,19 +75,19 @@ class ValueReader:
 
         return None
 
-    async def send_group_read(self) -> None:
+    def send_group_read(self) -> None:
         """Send group read."""
         telegram = Telegram(
             destination_address=self.group_address,
             payload=GroupValueRead(),
             source_address=self.xknx.current_address,
         )
-        await self.xknx.telegrams.put(telegram)
+        self.xknx.telegrams.put_nowait(telegram)
 
-    async def telegram_received(self, telegram: Telegram) -> None:
+    def telegram_received(self, telegram: Telegram) -> None:
         """Test if telegram has correct group address and trigger event."""
         if telegram.destination_address == self.group_address and isinstance(
-            telegram.payload, (GroupValueResponse, GroupValueWrite)
+            telegram.payload, GroupValueResponse | GroupValueWrite
         ):
             self.received_telegram = telegram
             self.response_received_event.set()

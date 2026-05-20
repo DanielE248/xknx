@@ -4,6 +4,7 @@ Module for Serialization and Deserialization of KNX Session Requests.
 The SESSION_REQUEST is used to initiate the secure connection setup
 handshake for a new secure communication session.
 """
+
 from __future__ import annotations
 
 from typing import Final
@@ -19,14 +20,14 @@ class SessionRequest(KNXIPBody):
     """Representation of a KNX Session Request."""
 
     SERVICE_TYPE = KNXIPServiceType.SESSION_REQUEST
-    # 8 octets for the UDP/TCP HPAI and 32 octets for the client’s ECDH public value
+    # 8 octets for the UDP/TCP HPAI and 32 octets for the clients ECDH public value
     LENGTH: Final = 40
 
     def __init__(
         self,
         control_endpoint: HPAI | None = None,
         ecdh_client_public_key: bytes = bytes(32),
-    ):
+    ) -> None:
         """Initialize SessionRequest object."""
         self.control_endpoint = control_endpoint or HPAI(protocol=HostProtocol.IPV4_TCP)
         self.ecdh_client_public_key = ecdh_client_public_key

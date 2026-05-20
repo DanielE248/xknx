@@ -1,4 +1,5 @@
 """Cryptographical calculations of KNX specification example frames."""
+
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PrivateKey,
@@ -60,7 +61,7 @@ def encrypt_data_ctr(
     Encrypt data with AES-CTR.
 
     Payload is optional; expected plain KNX/IP frame bytes.
-    MAC shall be encrypted with coutner 0, KNXnet/IP frame with incremented counters.
+    MAC shall be encrypted with counter 0, KNXnet/IP frame with incremented counters.
     Encrypted MAC is appended to the end of encrypted payload data (if there is any).
     """
     s_cipher = Cipher(algorithms.AES(key), modes.CTR(counter_0))
@@ -121,7 +122,7 @@ def calculate_wrapper(
     )
     ctr_0_secure_wrapper = (
         sequence_number + serial_number + message_tag + bytes.fromhex("ff") + bytes(1)
-    )  # last octet is the coutner to increment by 1 each step
+    )  # last octet is the counter to increment by 1 each step
 
     mac_cbc = calculate_message_authentication_code_cbc(
         session_key,
@@ -157,7 +158,7 @@ def calculate_wrapper(
     return encrypted_data
 
 
-def main():
+def main() -> None:
     """Recalculate KNX specification example frames."""
     ################
     # SessionRequest
@@ -267,7 +268,7 @@ def main():
     )
     session_authenticate = bytes.fromhex(
         "06 10 09 53 00 18 00 01"
-        "1f 1d 59 ea 9f 12 a1 52 e5 d9 72 7f 08 46 2c de"  # MAC
+        + "1f 1d 59 ea 9f 12 a1 52 e5 d9 72 7f 08 46 2c de"  # MAC
     )
     mac_cbc_authenticate = calculate_message_authentication_code_cbc(
         password_hash,

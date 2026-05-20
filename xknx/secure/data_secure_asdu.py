@@ -1,4 +1,5 @@
 """Class for Data Secure Application layer service data units (ASDUs)."""
+
 from __future__ import annotations
 
 from enum import IntEnum
@@ -69,6 +70,8 @@ class SecurityALService(IntEnum):
 class SecurityControlField:
     """Class for KNX Data Secure Security Control Field (SCF)."""
 
+    __slots__ = ("algorithm", "service", "system_broadcast", "tool_access")
+
     def __init__(
         self,
         tool_access: bool,
@@ -119,6 +122,8 @@ class SecurityControlField:
 class SecureData:
     """Class for KNX Data Secure ASDU for S-A_Data-service."""
 
+    __slots__ = ("message_authentication_code", "secured_apdu", "sequence_number_bytes")
+
     def __init__(
         self,
         sequence_number_bytes: bytes,
@@ -137,7 +142,7 @@ class SecureData:
     @staticmethod
     def init_from_plain_apdu(
         key: bytes,
-        apdu: bytes,
+        apdu: bytes | bytearray,
         scf: SecurityControlField,
         sequence_number: int,
         address_fields_raw: bytes,
@@ -159,7 +164,7 @@ class SecureData:
                     payload_length=0,
                 ),
             )[:4]
-            secured_apdu = apdu
+            secured_apdu = bytes(apdu)
         elif scf.algorithm == SecurityAlgorithmIdentifier.CCM_ENCRYPTION:
             mac_cbc = calculate_message_authentication_code_cbc(
                 key=key,

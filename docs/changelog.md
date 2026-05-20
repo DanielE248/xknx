@@ -6,19 +6,432 @@ nav_order: 2
 
 # Changelog
 
-# Unreleased changes
-
-### Data Secure
-
-- Support KNX Data Secure for group communication. Keys are read from an ETS keyring export.
+# Unreleased
 
 ### Internals
 
+- Split `xknx/management/procedures.py` into the `xknx/management/procedures/` package. Each procedure lives in its own file under a family subdirectory (`network/`, `device/`, etc.) with the KNX spec prefix in the filename. Public API and behaviour unchanged.
+
+# 3.15.0 Task improvements 2026-02-15
+
+### Telegram
+
+- Add `data_secure` flag to Telegram to indicate if it was sent or received as Data Secure.
+
+### Devices
+
+- ExposeSensor: `cooldown` is extended to wait for connection if not established.
+- Weather: Add `invert_day_night` option to invert day/night value.
+
+### Internals
+
+- Replace `TaskRegistry.register()` with `TaskRegistry.start_task()` for better readability and easier handling.
+- Rename `TaskRegistry.unregister()` to `TaskRegistry.remove_task()`.
+- Allow TaskRegistry Tasks to call regular functions as well as async functions. Rename TaskRegistry.register and Task `async_func` attribute to `target`.
+- Add TaskRegistry Task `wait_before_start` and `wait_for_connection` options to delay task start and wait for an established connection before running the target function.
+- Add TaskRegistry Task `repeat_after` option to automatically restart the task periodically.
+- Remove TaskRegistry.register `track_task` option. All tasks used this option before and it is now the default behaviour.
+
+# 3.14.0 ExposeSensor improvements 2026-01-12
+
+### Devices
+
+- ExposeSensor: Add `skip_unchanged` argument to `set` method to skip sending when the encoded payload matches the last one.
+- ExposeSensor: Add `periodic_send` argument to re-send value in a time interval (seconds). Disabled on `0` (default).
+
+### Internal
+
+- Add `__slots__` to various classes.
+- Unsuccessful tunnel disconnects don't raise anymore.
+
+# 3.13.0 Numeric metering 2025-12-18
+
+### DPT
+
+- Add numeric metering DPTs 13.1200, 13.1201, 14.1200, 14.1201
+
+### Devices
+
+- Fan: Fix turn_on default speed when step-mode is used.
+
+# 3.12.0 Data Secure diagnostics 2025-12-03
+
+### Data Secure
+
+- Don't forward Data Secure frames in the CEMI handler when no keys are initialized.
+- Add a callback for undecodable Data Secure telegrams for diagnostics/monitoring: `xknx.telegram_queue.register_data_secure_group_key_issue_cb`.
+- Add a counter for undecodable Data Secure telegrams: `xknx.connection_manager.undecoded_data_secure`.
+
+### Connection
+
+- Tunnelling UDP: Cleanup reconnection task logic for invalid sequence number reconnect.
+
+### Other
+
+- `xknx.connection_manager.register_connection_state_changed_cb` now returns an unsubscribe callable instead of `None`.
+- Make GroupAddress, IndividualAddress and InternalGroupAddress sortable and comparable.
+
+# 3.11.0 Reconnect 2025-11-22
+
+### Connection
+
+- Tunnelling: Refactor reconnection logic. Immediate first reconnection attempt, prevent reconnect task leak.
+- Tunnelling: Mitigate dropping frames while reconnecting.
+- Tunnelling UDP: Schedule disconnect when receiving frames with invalid sequence numbers.
+
+# 3.10.1 Fix cover auto-stop 2025-11-09
+
+### Devices
+
+- Cover: Fix race condition for cover auto-stopper.
+
+# 3.10.0 Always callback Sensor and BinarySensor 2025-10-13
+
+### Devices
+
+- Sensor: Fire callback when `always_callback` is `True` for write as well as for response telegrams.
+- BinarySensor: Add `always_callback` attribute to fire callbacks for every telegram.
+
+### Internal
+
+- Add support and test for Python 3.14
+
+# 3.9.1 Fix Climate initialization 2025-10-10
+
+### Devices
+
+- Climate: Fix `supports_on_off` flag when empty list passed as group address.
+
+# 3.9.0 Scene callbacks 2025-08-26
+
+### Devices
+
+- Scene: Fire device callback if scene number is activated (from xknx or bus).
+- Add `group_addresses()` method to `Device` (and `RemoteValue`) to get all configured group addresses.
+
+### Internal
+
+- Use `repr()` for values in exceptions.
+
+# 3.8.0 Valid energy 2025-05-12
+
+### Connection
+
+- Support passing a `Keyring` object to `SecureConfig` instead of a path to a keyring file
+
+### DPT
+
+- Fix flipped DPT 235.001 (Tariff and ActiveEnergy) data validity bits
+
+# 3.7.0 Routing improvements 2025-04-17
+
+### Routing
+
+- Use separate socket for outgoing Multicast (Routing) datagrams. Source port will be different - this is used to filter loopback packets while still be able to have multiple instances of xknx on the same host communicating with each other via routing.
+- Fix routing flow control wait time update on multiple RoutingBusy frames.
+
+# 3.6.0 DPT helpers and timezone 2025-02-19
+
+### Devices
+
+- Datetime: Accept `datetime.tzinfo` for `timezone` argument to send time information for specific timezone. Boolean works like before: If `True` use system localtime. If `False` an arbitrary time can be sent.
+
+### DPT
+
+- Add `DPTBase.dpt_number_str` and `DPTBase.dpt_name` classmethods for human readable DPT number (eg. "9.001") and class name (eg. "DPTTemperature (9.001)").
+- Add `DPTBase.get_dpt` classmethod to get a DPT class by its number, name or DPTBase type.
+
+### Internal
+
+- Collect group addresses with decoding errors at eager decoder in `xknx.group_address_dpt.ga_decoding_error` set.
+
+# 3.5.0 Swing it 2025-01-28
+
+### Devices
+
+- Climate: Added swing and horizontal swing support to climate device
+
+# 3.4.0 8 byte energy and 4 byte pressure 2024-11-20
+
+### Devices
+
+- Weather: Support either DPT 9.006 (2byte) or DPT 14.058 (4byte) for `group_address_air_pressure`
+
+### DPT
+
+- Add DPT 29 - 8byte signed definitions: generic, 29.010, 29.011, 20.012
+
+### Management
+
+- Add rate limit (in packets per second) option to P2PConnection.
+- Fix typo in management procedure (`nm_invididual_address_write` was renamed to `nm_individual_address_write`)
+- Fix TunnellingFeatureResponse missing `return_code`
+
+# 3.3.0 Climate humidity 2024-10-20
+
+### Devices
+
+- Climate: Added humidity support
+
+# 3.2.0 Climate Fan speed 2024-09-23
+
+### Devices
+
+- Climate: Added fan speed support
+
+# 3.1.1 Fix Eberle status 2024-08-19
+
+### Bugfixes
+
+- Fix DPTHVACStatus inverted bit order
+
+# 3.1.0 DPT 1 2024-08-13
+
+### DPT
+
+- Add DPT 1 definitions (as of KNX Specification 03_07_02 version 02.02.01)
+
+### Devices
+
+- ClimateMode: Restore `Climate.suppports_operation_mode` and `Climate.supports_controller_mode` to be `True` when read-only (like pre 3.0.0)
+- ClimateMode: Filter custom controller / operation modes for available settable modes
+- ClimateMode: For binary operation modes, only list configured modes and `Standby` in `operation_modes`
+
+### Bugfixes
+
+- Fix log message for DPT decoding errors in `GroupAddressDPT` parsing
+
+# 3.0.0 Eager telegram decoding, DPTComplex and DPTEnum 2024-07-31
+
+### Breaking changes
+
+- Drop support for Python 3.9
+- Change callback signatures from awaitable to callable in `XKNX.device_updated_cb`, TelegramQueue, Device, Devices, ConnectionManager and RemoteValue.
+- Remove `async` from functions / methods (nothing has to be awaited there)
+  - Tools:  `group_value_write`, `group_value_response` and `group_value_read`
+  - ConnectionManager: `.connection_state_changed`
+  - Device: `.process`, `.process_group_write`, `.process_group_read`, `.process_group_response`
+  - Devices: `.process`
+  - RemoteValue: `.set`, `.respond`, `.process` and `.update_value`
+  - ValueReader: `.send_group_read`
+- Rename DPT transcoder modules for schema `xknx.dpt.dpt_<main-number>.py`
+
+### Bugfixes
+
+- Fix value scaling for sensor types: time_period_100msec, time_period_10msec, delta_time_10ms, delta_time_100ms, percentV16
+
+### Features
+
+- Added eager telegram data decoding for GroupValueWrite / GroupValueResponse Telegrams. DPTs for group addresses can be set using `xknx.group_address_dpt.set()`. `Telegram` has a new attribute `decoded_data` which is set when a decoder was found.
+
+### Devices
+
+- A Device doesn't auto-add to `xknx.devices` anymore. It can be done via `xknx.devices.async_add()` now. `xknx.devices.async_remove` stops a device from processing telegrams, removes from StateUpdater and cancels its internal tasks. Removed devices can be added again.
+- `Device.shutdown` method is removed
+- Refactor `ClimateMode` device
+- Rename `ClimateMode` argument `group_address_operation_mode_night` to `group_address_operation_mode_economy`
+- Remove DPT 3 special handling `stepwise_*` and `startstop_*` from Sensor device
+- Remove `DateTime` device in favour of `DateDevice`, `TimeDevice` and `DateTimeDevice` using `datetime` objects instead of `time.struct_time`
+
+### DPT
+
+- DPTComplex: Common interface for DPT transcoders with multi-value data. Resulting dataclasses can be converted to and from a dict with DPT specific properties to be JSON compatible.
+- Added or refactored complex DPTs and dataclasses:
+  - 3.007 - DPTControlDimming
+  - 3.008 - DPTControlBlinds
+  - 10.001 - DPTTime - KNXTime
+  - 11.001 - DPTDate - KNXDate
+  - 18.001 - DPTSceneControl
+  - 19.001 - DPTDateTime - KNXDateTime
+  - 232.600 - DPTColorRGB - RGBColor
+  - 235.001 - DPTTariffActiveEnergy - TariffActiveEnergy
+  - 242.600 - DPTColorXYY - XYYColor
+  - 251.600 - DPTColorRGBW - RGBWColor
+  - 20.60102 - DPTHVACStatus - HVACStatus (removed DPTControllerStatus in favour of this)
+- DPTEnum: Common interface for DPT representing enumueration values. Transcoders accept Enum, string or raw integer values for encoding.
+  - 1.007 - DPTStep
+  - 1.008 - DPTUpDown
+  - 1.100 - DPTHeatCool
+  - 20.102 - DPTHVACMode - HVACOperationMode
+    - rename "NIGHT" to "ECONOMY" and "FROST_PROTECTION" to "BUILDING_PROTECTION" according to KNX specifications
+  - 20.105 - DPTHVACContrMode - HVACControllerMode
+    - rename "DRY" to "DEHUMIDIFICATION" and add some values according to KNX specifications
+- Change DPT number of Enthalpy from 9.999 to 9.60000 (manufacturer specific range)
+- Support dict values with "main" and "sub" keys for `DPTBase.parse_transcoder()`
+- Verify DPTBinary max payload bitsize when decoding by transcoders `payload_length`
+
+### Address
+
+- `InternalGroupAddress` attribute `address` is renamed to `raw` to be in line with `GroupAddress` (although still str). Its value has an "i-" prefix.
+
+### Internal
+
+- Use `slots` in addresses, Telegram, DPTBinary, DPTArray, TPCI, APCI, DPTComplexData
+- Convert Telegram and APCI to dataclasses. `Telegram` is not hashable anymore.
+- RemoteValue instances use pre-decoded data from Telegrams if available and `dpt_class` for is set - otherwise they decode the data themselves in `from_knx` like before.
+- Remove RemoteValueControl and unused RemoteValue1Count class
+- Add value argument to RemoteValue `after_update_cb` callback
+
+# 2.12.2 Fix thread leak 2024-03-05
+
+### Bugfixes
+
+- Fix thread leak when initial connection attempt fails (on threaded connection mode).
+
+# 2.12.1 Address error messages 2024-02-26
+
+### Internal
+
+- More detailed address parsing error messages.
+
+# 2.12.0 Broadcasts 2024-02-05
+
+### Bugfixes
+
+- `None` is not a valid address parameter for GroupAddress and IndividualAddress anymore. It raises `CouldNotParseAddress`.
+- `None` in a RemoteValue or Device group address list is now ignored instead of parsed as broadcast address.
+- Broadcast address ("0/0/0") is now invalid for RemoteValue and Device group addresses and raises `CouldNotParseAddress`.
+
+### Management
+
+- Add handling mechanism and sending method for broadcast telegrams in the management class.
+- Add new management procedures for device management: `nm_invididual_address_write`,  `nm_individual_address_read`, `nm_individual_address_serial_number_read` and `nm_individual_address_serial_number_write`.
+
+### Secure
+
+- Parse `project_name` from an ETS Keyring.
+
+### Internal
+
+- Use ruff format and more ruff linters. Remove black, isort, flake8 and pyupgrade from requirements.
+
+# 2.11.2 DPT 9 small negative fix 2023-07-24
+
+### Bugfixes
+
+- Fix DPT 9 handling of values < `0` and >= `-0.005`. These are now rounded to `0` instead of being sent as `-20.48`.
+
+# 2.11.1 DateTime fix 2023-06-26
+
+### Bugfixes
+
+- Fix processing custom time data in DateTime devices.
+
+# 2.11.0 DateTime state 2023-06-25
+
+### Devices
+
+- Add group_address_state, respond_to_read and sync_state arguments to DateTime devices.
+- Add DPT 9 support for Light color temperature.
+
+### Internals
+
+- Remove pydocstyle and flake8 plugins, add pytest-icdiff to testing requirements.
+
+# 2.10.0 Tunnelling Feature 2023-05-08
+
+### Protocol
+
+- Support Tunnelling Feature service messages.
+
+# 2.9.0 Spring cleanup 2023-04-22
+
+### Dependencies
+
+- For Python <3.11 dependency `async_timeout` is added as backport for `asyncio.timeout`.
+
+### Internals
+
+- Replace `asyncio.wait_for` with `asyncio.timeout`.
+- Add Ruff to pre-commit and tox.
+- Use pyproject.toml for specifying project metadata.
+
+# 2.8.0 Hostnames 2023-04-12
+
+### Connection
+
+- Resolve IP addresses from hostname or adapter name for `gateway_ip` or `local_ip`.
+
+### Bugfixes
+
+- Handle empty list for group addresses in RemoteValue.
+
+### Internals
+
+- Refactor DPTBase transcoder classes
+  - Accept `DPTArray` or `DPTBinary` in `DPTBase.from_knx()` instead of raw `tuple[int]`.
+  - Return `DPTArray` or `DPTBinary` from `DPTBase.to_knx()` instead of `tuple[int, ...]`.
+  - Remove payload_valid() from RemoteValue and remove payload type form its generics parameters.
+
+# 2.7.0 IP Device Management 2023-03-15
+
+### Protocol
+
+- Add support for Device Management Configuration service.
+- Support CEMI M_Prop messages.
+- Don't ignore CEMIFrames with source address equal to `xknx.current_address`.
+
+### Internals
+
+- Use CEMILData instead of CEMIFrame in DataSecure.
+- Move `init_from_telegram()` from CEMIFrame to CEMILData. `telegram()` is now a method of CEMILData instead of a property of CEMIFrame.
+
+# 2.6.0 Connection information 2023-02-27
+
+### Connection
+
+- When `ConnectionConfig.individual_address` is set and a Keyring is given `ConnectionType.AUTOMATIC` will try to connect to the host of this address. If not found (in keyfile or discovery) it will raise.
+- Add CEMIFrame counters connection type and timestamp of connection start.
+
+### Internals
+
+- Lower log levels for unsupported Telegrams and add more information.
+- Move CEMIFrame parsing from Interface to CEMIHandler.
+
+# 2.5.0 Request IA 2023-02-14
+
+### Connection
+
+- Use only Interfaces listed in Keyring when `ConnectionType.AUTOMATIC` is used and a Keyring is configured.
+- Request specific tunnel by individual address for TCP connections when `ConnectionConfig.individual_address` is set.
+
+### Bugfixes
+
+- Parse Data Secure credentials form Keyring from non-IP-Secure interfaces.
+- Parse Data Secure credentials from Keyrings exported for specific interfaces.
+- Fix callback for Cover target position when called with same value consecutively.
+- Fix Windows TCP transport bug when using IP Secure Tunnelling.
+- Don't create unreferenced asyncio Tasks. `xknx.task_registry.background()` can now be used to create background tasks.
+
+### Protocol
+
+- Support Extended Connection Request Information (CRI) for requesting a specific individual address on Tunnelling v2.
+- Add Core v2 Error Code definitions.
+
+### Cleanups
+
+- Accept `str | os.PathLike` for Keyring path. Previously only `str`.
+- Rename `_load_keyring` to `sync_load_keyring` to make it public e.g. when it should be used from an executor.
+- Update CI. Use `codespell` and `flake8-print`.
+
+# 2.4.0 Data Secure 2023-02-05
+
+### Data Secure
+
+- Support KNX Data Secure for group communication. Keys are sourced from an ETS keyring file.
+
+### Bugfixes
+
+- Fix wrong string length in keyfile signature verification for multi-byte UTF-8 encoded attribute values.
+
+### Internals
+
+- `destination_address` in `Telegram` init is no longer optional.
+- `timestamp` attribute in `Telegram` is removed.
+- Rename `xknx.secure.ip_secure` to `xknx.secure.security_primitives`.
 - Return `bytes` from `BaseAddress.to_knx()` instead of `tuple[int, int]`. This is used in `IndividualAddress` and `GroupAddress`.
 - Add `BaseAddress.from_knx()` to instantiate from `bytes`, remove instantiation form `tuple[int, int]`.
 - Refactor APCI to return complete Subclass `APCI.from_knx()` and removed `APCI.resolve_apci()`.
-- Rename `xknx.secure.ip_secure` to `xknx.secure.security_primitives`.
-- Fix wrong string length in keyfile signature verification for multi-byte UTF-8 encoded attribute values.
 
 # 2.3.0 Routing security, DPTs and CEMI-Refactoring 2023-01-10
 
@@ -108,7 +521,7 @@ nav_order: 2
 
 ### Management
 
-- Fix APCI service parsing for 10bit control fileds.
+- Fix APCI service parsing for 10bit control fields.
 - Set reasonable default count values for APCI classes.
 - Set xknx.current_address for routing connections so management frames received over Routing are handled properly.
 - Fix wrong length of AuthorizeRequest.
@@ -693,7 +1106,7 @@ nav_order: 2
 
 - HA Switch entity: keep state without state_address
 - Cover: fix `set_position` without writable position / auto_stop_if_necessary
-- handle unsupported CEMI Messages without loosing tunnel connection
+- handle unsupported CEMI Messages without losing tunnel connection
 
 ## 0.15.2 Winter is coming
 
@@ -806,7 +1219,7 @@ nav_order: 2
 
 - Climate: `setpoint_shift_step` renamed for `temperature_step`. This attribute can be applied to all temperature modes. Default is `0.1`
 - Removed significant_bit attribute in BinarySensor
-- DateTime devices are initialized with sting for broadcast_type: "time", "date" or "datetime" instead of an Enum value
+- DateTime devices are initialized with string for broadcast_type: "time", "date" or "datetime" instead of an Enum value
 - Removed `bind_to_multicast` option in ConnectionConfig and UDPClient
 
 ### New Features
@@ -848,7 +1261,7 @@ nav_order: 2
 
 ### New Features
 
-- added a lot of DPTs now useable as sensor type (@eXtenZy #255)
+- added a lot of DPTs now usable as sensor type (@eXtenZy #255)
 
 ### Bugfixes
 
@@ -937,13 +1350,13 @@ nav_order: 2
 ## 0.9.2 - Release 2018-12-22
 
 - Min and max values for Climate device
-- Splitted up Climate in Climate and ClimateMode
+- split up Climate in Climate and ClimateMode
 - added **contains** method for Devices class.
 - fixed KeyError when action refers to a non existing device.
 
 ## 0.9.1 - Release 2018-10-28
 
-- state_addresses of binary_sesor should return emty value if no
+- state_addresses of binary_sesor should return empty value if no
   state address is set.
 - state_address for notification device
 
@@ -979,7 +1392,7 @@ nav_order: 2
 
 - Color support for HASS plugin
 - Bugfixes (esp problem with unhashable exceptions)
-- Refactoring: splitted up remote_value.py
+- Refactoring: split up remote_value.py
 - Better test coverage
 
 ## 0.8.1 - Release 2018-02-03
@@ -990,7 +1403,7 @@ nav_order: 2
 ## 0.8.0 - Release 2018-01-27
 
 - New example for MQTT forwarder (thanks @JohanElmis)
-- Splitted up Address into GroupAddress and PhysicalAddress (thanks @encbladexp)
+- split up Address into GroupAddress and PhysicalAddress (thanks @encbladexp)
 - Time object was renamed to Datetime and does now support different broadcast types "time", "date" and "datetime" (thanks @Roemer)
 - Many new DTP datapoints esp for physical values (thanks @Straeng and @JohanElmis)
 - new asyncio `await` syntax
@@ -1031,7 +1444,7 @@ The naming of some device were changed in order to get the nomenclature closer t
 
 #### Climate
 
-Renamed class `Thermostat` to `Climate` . Plase rename the section within configuration:
+Renamed class `Thermostat` to `Climate` . Please rename the section within configuration:
 
 ```yaml
 groups:
@@ -1041,7 +1454,7 @@ groups:
 
 #### Cover
 
-Renamed class `Shutter` to `Cover`. Plase rename the section within configuration:
+Renamed class `Shutter` to `Cover`. Please rename the section within configuration:
 
 ```yaml
 groups:
@@ -1059,7 +1472,7 @@ groups:
 
 #### Binary Sensor
 
-Renamed class `Switch` to `BinarySensor`. Plase rename the section within configuration:
+Renamed class `Switch` to `BinarySensor`. Please rename the section within configuration:
 
 ```yaml
 groups:

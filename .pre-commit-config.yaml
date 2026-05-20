@@ -1,34 +1,25 @@
 ---
 repos:
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.3.1
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.2
     hooks:
-      - id: pyupgrade
-        args: [--py39-plus]
-  - repo: https://github.com/psf/black
-    rev: 23.1.0
-    hooks:
-      - id: black
-        args:
-          - --safe
-          - --quiet
-        files: ^((xknx|test|examples|docs)/.+)?[^/]+\.py$
-  - repo: https://github.com/pycqa/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
+      - id: codespell
         additional_dependencies:
-          - flake8-docstrings==1.6.0
-          - pydocstyle==6.0.0
-        files: ^(xknx|examples|docs)/.+\.py$
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
+          - tomli
+        exclude_types: [csv, json]
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: 'v0.15.10'
     hooks:
-      - id: isort
-        args:
-          - --resolve-all-configs
+      - id: ruff
+        # in CI it is directly run by tox to allow dependency upgrade checks
+        stages: [pre-commit]
+        args: [ --fix, --exit-non-zero-on-fix ]
+      - id: ruff-format
+        files: ^((xknx|test|examples|docs)/.+)?[^/]+\.py$
+        # in CI it is directly run by tox to allow dependency upgrade checks
+        stages: [pre-commit]
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v6.0.0
     hooks:
       - id: check-executables-have-shebangs
         stages: [manual]
@@ -38,7 +29,7 @@ repos:
           - --branch=main
       - id: trailing-whitespace
   - repo: https://github.com/cdce8p/python-typing-update
-    rev: v0.5.1
+    rev: v0.8.1
     hooks:
       # Run `pre-commit run --hook-stage manual python-typing-update --all-files` manually
       # from time to time to update python typing syntax.
@@ -46,7 +37,7 @@ repos:
       - id: python-typing-update
         stages: [manual]
         args:
-          - --py39-plus
+          - --py310-plus
           - --force
           - --keep-updates
         files: ^(xknx)/.+\.py$
@@ -63,3 +54,24 @@ repos:
         types: [python]
         require_serial: true
         files: ^xknx/.+\.py$
+
+  - repo: local
+    hooks:
+    - id: pylint-xknx
+      name: pylint-xknx
+      entry: pylint xknx examples
+      language: python
+      types: [python]
+      pass_filenames: true
+      require_serial: true
+      files: ^(xknx/|examples/)
+
+    - id: pylint-test
+      name: pylint-test
+      entry: pylint --disable=protected-access,abstract-class-instantiated
+      language: python
+      types: [python]
+      pass_filenames: true
+      require_serial: true
+      files: ^test/
+

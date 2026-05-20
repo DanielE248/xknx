@@ -3,6 +3,7 @@ Module for Serialization and Deserialization of KNX RoutingIndication frames.
 
 Routing indications are used to transport CEMI Messages.
 """
+
 from __future__ import annotations
 
 from .body import KNXIPBody
@@ -14,7 +15,7 @@ class RoutingIndication(KNXIPBody):
 
     SERVICE_TYPE = KNXIPServiceType.ROUTING_INDICATION
 
-    def __init__(self, raw_cemi: bytes = b""):
+    def __init__(self, raw_cemi: bytes = b"") -> None:
         """Initialize RoutingIndication object."""
         self.raw_cemi = raw_cemi
 

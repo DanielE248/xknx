@@ -1,5 +1,7 @@
 """Test xknx tools package."""
-from unittest.mock import AsyncMock, patch
+
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,7 +18,7 @@ from xknx.tools import (
 )
 
 
-async def test_group_value_read():
+def test_group_value_read() -> None:
     """Test group_value_read."""
     xknx = XKNX()
     group_address = "1/2/3"
@@ -25,12 +27,12 @@ async def test_group_value_read():
         destination_address=GroupAddress(group_address),
         payload=apci.GroupValueRead(),
     )
-    await group_value_read(xknx, "1/2/3")
+    group_value_read(xknx, "1/2/3")
     assert xknx.telegrams.qsize() == 1
     assert xknx.telegrams.get_nowait() == read
 
 
-async def test_group_value_response():
+def test_group_value_response() -> None:
     """Test group_value_response."""
     xknx = XKNX()
     group_address = "1/2/3"
@@ -39,13 +41,13 @@ async def test_group_value_response():
         destination_address=GroupAddress(group_address),
         payload=apci.GroupValueResponse(DPTBinary(1)),
     )
-    await group_value_response(xknx, "1/2/3", True)
+    group_value_response(xknx, "1/2/3", True)
     assert xknx.telegrams.qsize() == 1
     assert xknx.telegrams.get_nowait() == response
 
 
 @pytest.mark.parametrize(
-    "value,value_type,expected",
+    ("value", "value_type", "expected"),
     [
         (50, "percent", DPTArray((0x80,))),
         (True, None, DPTBinary(1)),
@@ -56,7 +58,9 @@ async def test_group_value_response():
         (DPTBinary(1), None, DPTBinary(1)),
     ],
 )
-async def test_group_value_write(value, value_type, expected):
+def test_group_value_write(
+    value: Any, value_type: Any, expected: DPTArray | DPTBinary
+) -> None:
     """Test group_value_write."""
     xknx = XKNX()
     group_address = "1/2/3"
@@ -65,28 +69,30 @@ async def test_group_value_write(value, value_type, expected):
         destination_address=GroupAddress(group_address),
         payload=apci.GroupValueWrite(expected),
     )
-    await group_value_write(xknx, "1/2/3", value, value_type=value_type)
+    group_value_write(xknx, "1/2/3", value, value_type=value_type)
     assert xknx.telegrams.qsize() == 1
     assert xknx.telegrams.get_nowait() == write
 
 
 @pytest.mark.parametrize(
-    "value,value_type,error_type",
+    ("value", "value_type", "error_type"),
     [
         (50, "unknown", ValueError),
         (50, 9.001, ValueError),  # float is invalid
         (101, "percent", ConversionError),  # too big
     ],
 )
-async def test_group_value_write_invalid(value, value_type, error_type):
+def test_group_value_write_invalid(
+    value: int, value_type: Any, error_type: type[Exception]
+) -> None:
     """Test group_value_write."""
     xknx = XKNX()
     with pytest.raises(error_type):
-        await group_value_write(xknx, "1/2/3", value, value_type=value_type)
+        group_value_write(xknx, "1/2/3", value, value_type=value_type)
 
 
 @pytest.mark.parametrize(
-    "value,value_type,expected",
+    ("value", "value_type", "expected"),
     [
         (50, "percent", DPTArray((0x80,))),
         ((0x80,), None, DPTArray((0x80,))),
@@ -94,7 +100,12 @@ async def test_group_value_write_invalid(value, value_type, error_type):
     ],
 )
 @patch("xknx.core.value_reader.ValueReader.read")
-async def test_read_group_value(value_reader_read_mock, value, value_type, expected):
+async def test_read_group_value(
+    value_reader_read_mock: MagicMock,
+    value: Any,
+    value_type: Any,
+    expected: DPTArray | DPTBinary,
+) -> None:
     """Test read_group_value."""
     xknx = XKNX()
     test_group_address = "1/2/3"
@@ -114,10 +125,9 @@ async def test_read_group_value(value_reader_read_mock, value, value_type, expec
     assert response_value == value
 
 
-async def test_tools_with_internal_addresses():
+async def test_tools_with_internal_addresses(xknx_no_interface: XKNX) -> None:
     """Test tools using internal addresses."""
-    xknx = XKNX()
-    xknx.knxip_interface = AsyncMock()
+    xknx = xknx_no_interface
     await xknx.start()
 
     internal_address = "i-test"
@@ -129,9 +139,10 @@ async def test_tools_with_internal_addresses():
         value_type=test_type,
         respond_to_read=True,
     )
+    xknx.devices.async_add(number)
 
     assert number.resolve_state() is None
-    await group_value_write(xknx, internal_address, 1, value_type=test_type)
+    group_value_write(xknx, internal_address, 1, value_type=test_type)
     await xknx.telegrams.join()
     assert number.resolve_state() == 1
 

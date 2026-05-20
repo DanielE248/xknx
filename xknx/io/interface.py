@@ -5,22 +5,29 @@ Abstract base for a specific KNX/IP connection (Tunneling or Routing).
 * It starts and stops a udp transport
 * It packs Telegrams into KNX Frames and passes them to a udp transport
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable
+from collections.abc import Callable
 
 from xknx.cemi import CEMIFrame
 
-CEMICallbackType = Callable[[CEMIFrame], None]
+from .transport.ip_transport import KNXIPTransport
+
+CEMIBytesCallbackType = Callable[[bytes], None]
 
 
 class Interface(ABC):
     """Abstract base class for KNX/IP connections."""
 
+    __slots__ = ("transport",)
+
+    transport: KNXIPTransport
+
     @abstractmethod
-    async def connect(self) -> bool:
-        """Connect to KNX bus. Returns True on success."""
+    async def connect(self) -> None:
+        """Connect to KNX bus. Raise CommunicationError when not successful."""
 
     @abstractmethod
     async def disconnect(self) -> None:

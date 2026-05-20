@@ -7,12 +7,15 @@ It provides functionality for
 * send local state changes to KNX bus.
 * watching for state updates from KNX bus.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+from xknx.dpt import DPTNumeric
 from xknx.remote_value import GroupAddressesType, RemoteValueNumeric
+from xknx.typing import DPTParsable
 
 from .device import Device, DeviceCallbackType
 
@@ -28,14 +31,14 @@ class NumericValue(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         respond_to_read: bool = False,
         sync_state: bool | int | float | str = True,
-        value_type: int | str | None = None,
+        value_type: DPTParsable | type[DPTNumeric] | None = None,
         always_callback: bool = False,
         device_updated_cb: DeviceCallbackType[NumericValue] | None = None,
-    ):
+    ) -> None:
         """Initialize Sensor class."""
         super().__init__(xknx, name, device_updated_cb)
         self.always_callback = always_callback
@@ -59,21 +62,21 @@ class NumericValue(Device):
         """Return the last telegram received from the RemoteValue."""
         return self.sensor_value.telegram
 
-    async def process_group_write(self, telegram: "Telegram") -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
-        await self.sensor_value.process(telegram, always_callback=self.always_callback)
+        self.sensor_value.process(telegram, always_callback=self.always_callback)
 
-    async def process_group_read(self, telegram: "Telegram") -> None:
+    def process_group_read(self, telegram: Telegram) -> None:
         """Process incoming GroupValueResponse telegrams."""
         if (
             self.respond_to_read
             and telegram.destination_address == self.sensor_value.group_address
         ):
-            await self.sensor_value.respond()
+            self.sensor_value.respond()
 
     async def set(self, value: float | int) -> None:
         """Set new value."""
-        await self.sensor_value.set(value)
+        self.sensor_value.set(value)
 
     def unit_of_measurement(self) -> str | None:
         """Return the unit of measurement."""

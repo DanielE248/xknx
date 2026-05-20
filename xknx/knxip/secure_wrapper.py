@@ -6,6 +6,7 @@ the KNXnet/IP header shall be completely encapsulated as encrypted payload insid
 SECURE_WRAPPER frame that adds some extra information needed to decrypt the frame and
 for ensuring data integrity and freshness.
 """
+
 from __future__ import annotations
 
 from typing import Final
@@ -45,7 +46,7 @@ class SecureWrapper(KNXIPBody):
         message_tag: bytes = bytes(2),
         encrypted_data: bytes = bytes(0),
         message_authentication_code: bytes = bytes(16),
-    ):
+    ) -> None:
         """Initialize SecureWrapper object."""
         self.secure_session_id = secure_session_id
         self.sequence_information = sequence_information

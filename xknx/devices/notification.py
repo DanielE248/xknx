@@ -1,10 +1,13 @@
 """Module for managing a text via KNX."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+from xknx.dpt import DPTString
 from xknx.remote_value import GroupAddressesType, RemoteValueString
+from xknx.typing import DPTParsable
 
 from .device import Device, DeviceCallbackType
 
@@ -20,13 +23,13 @@ class Notification(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         respond_to_read: bool = False,
         sync_state: bool | int | float | str = True,
-        value_type: int | str | None = None,
+        value_type: DPTParsable | type[DPTString] | None = None,
         device_updated_cb: DeviceCallbackType[Notification] | None = None,
-    ):
+    ) -> None:
         """Initialize notification class."""
         super().__init__(xknx, name, device_updated_cb)
 
@@ -54,19 +57,19 @@ class Notification(Device):
     async def set(self, message: str) -> None:
         """Set message."""
         cropped_message = message[:14]
-        await self.remote_value.set(cropped_message)
+        self.remote_value.set(cropped_message)
 
-    async def process_group_write(self, telegram: Telegram) -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
-        await self.remote_value.process(telegram)
+        self.remote_value.process(telegram)
 
-    async def process_group_read(self, telegram: Telegram) -> None:
+    def process_group_read(self, telegram: Telegram) -> None:
         """Process incoming GroupValueResponse telegrams."""
         if (
             self.respond_to_read
             and telegram.destination_address == self.remote_value.group_address
         ):
-            await self.remote_value.respond()
+            self.remote_value.respond()
 
     def __str__(self) -> str:
         """Return object as readable string."""

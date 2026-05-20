@@ -4,6 +4,7 @@ GatewayScanner is an abstraction for searching for KNX/IP devices on the local n
 It walks through all network interfaces and sends UDP multicast
 SearchRequest and SearchRequestExtended frames.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,6 +36,7 @@ from xknx.knxip.dib import (
     TunnelingSlotStatus,
 )
 from xknx.telegram import IndividualAddress
+from xknx.util import asyncio_timeout
 
 from .transport import UDPTransport
 
@@ -59,7 +61,10 @@ class GatewayDescriptor:
         supports_tunnelling_tcp: bool = False,
         supports_secure: bool = False,
         individual_address: IndividualAddress | None = None,
-    ):
+        multicast_address: str = "",
+        serial_number: str = "",
+        mac_address: str = "",
+    ) -> None:
         """Initialize GatewayDescriptor class."""
         self.name = name
         self.ip_addr = ip_addr
@@ -71,6 +76,9 @@ class GatewayDescriptor:
         self.supports_tunnelling = supports_tunnelling
         self.supports_tunnelling_tcp = supports_tunnelling_tcp
         self.supports_secure = supports_secure
+        self.multicast_address = multicast_address
+        self.serial_number = serial_number
+        self.mac_address = mac_address
 
         self.core_version: int = 0
         self.routing_requires_secure: bool | None = None
@@ -83,6 +91,9 @@ class GatewayDescriptor:
             if isinstance(dib, DIBDeviceInformation):
                 self.name = dib.name
                 self.individual_address = dib.individual_address
+                self.serial_number = dib.serial_number
+                self.mac_address = dib.mac_address
+                self.multicast_address = dib.multicast_address
                 continue
             if isinstance(dib, DIBSuppSVCFamilies):
                 self.core_version = dib.version(DIBServiceFamily.CORE) or 0
@@ -114,6 +125,9 @@ class GatewayDescriptor:
             f"    individual_address={self.individual_address}\n"
             f"    local_interface={self.local_interface},\n"
             f"    local_ip={self.local_ip},\n"
+            f"    multicast_address={self.multicast_address},\n"
+            f"    serial_number={self.serial_number},\n"
+            f"    mac_address={self.mac_address},\n"
             f"    core_version={self.core_version},\n"
             f"    supports_routing={self.supports_routing},\n"
             f"    supports_tunnelling={self.supports_tunnelling},\n"
@@ -131,7 +145,8 @@ class GatewayDescriptor:
 
 
 class GatewayScanFilter:
-    """Filter to limit gateway scan results.
+    """
+    Filter to limit gateway scan results.
 
     If `name` doesn't match the gateway name, the gateway will be ignored.
 
@@ -147,7 +162,7 @@ class GatewayScanFilter:
         routing: bool | None = True,
         secure_tunnelling: bool | None = True,
         secure_routing: bool | None = True,
-    ):
+    ) -> None:
         """Initialize GatewayScanFilter class."""
         self.name = name
         self.tunnelling = tunnelling
@@ -160,37 +175,33 @@ class GatewayScanFilter:
         """Check whether the device is a gateway and given GatewayDescriptor matches the filter."""
         if self.name is not None and self.name != gateway.name:
             return False
-        if (
-            self.tunnelling
-            and gateway.supports_tunnelling
-            and not gateway.tunnelling_requires_secure
-        ):
-            return True
-        if (
-            self.tunnelling_tcp
-            and gateway.supports_tunnelling_tcp
-            and not gateway.tunnelling_requires_secure
-        ):
-            return True
-        if (
-            self.routing
-            and gateway.supports_routing
-            and not gateway.routing_requires_secure
-        ):
-            return True
-        if (
-            self.secure_tunnelling
-            and gateway.supports_tunnelling_tcp
-            and gateway.tunnelling_requires_secure
-        ):
-            return True
-        if (
-            self.secure_routing
-            and gateway.supports_routing
-            and gateway.routing_requires_secure
-        ):
-            return True
-        return False
+        return (
+            bool(
+                self.tunnelling
+                and gateway.supports_tunnelling
+                and not gateway.tunnelling_requires_secure
+            )
+            or bool(
+                self.tunnelling_tcp
+                and gateway.supports_tunnelling_tcp
+                and not gateway.tunnelling_requires_secure
+            )
+            or bool(
+                self.routing
+                and gateway.supports_routing
+                and not gateway.routing_requires_secure
+            )
+            or bool(
+                self.secure_tunnelling
+                and gateway.supports_tunnelling_tcp
+                and gateway.tunnelling_requires_secure
+            )
+            or bool(
+                self.secure_routing
+                and gateway.supports_routing
+                and gateway.routing_requires_secure
+            )
+        )
 
     def __eq__(self, other: object) -> bool:
         """Equality for GatewayScanFilter class."""
@@ -207,7 +218,7 @@ class GatewayScanner:
         timeout_in_seconds: float = 3.0,
         stop_on_found: int | None = None,
         scan_filter: GatewayScanFilter | None = None,
-    ):
+    ) -> None:
         """Initialize GatewayScanner class."""
         self.xknx = xknx
         self.local_ip = local_ip
@@ -242,13 +253,14 @@ class GatewayScanner:
         self, queue: asyncio.Queue[GatewayDescriptor | None] | None = None
     ) -> None:
         """Scan for gateways."""
-        local_ip = self.local_ip or await util.get_default_local_ip(
+        _local_ip = self.local_ip or await util.get_default_local_ip(
             remote_ip=self.xknx.multicast_group
         )
-        if local_ip is None:
+        if _local_ip is None:
             if queue is not None:
                 queue.put_nowait(None)
             raise XKNXException("No usable network interface found.")
+        local_ip = await util.validate_ip(_local_ip)
         interface_name = util.get_local_interface_name(local_ip=local_ip)
         logger.debug("Searching on %s / %s", interface_name, local_ip)
 
@@ -265,10 +277,8 @@ class GatewayScanner:
         )
         try:
             await self._send_search_requests(udp_transport=udp_transport)
-            await asyncio.wait_for(
-                self._response_received_event.wait(),
-                timeout=self.timeout_in_seconds,
-            )
+            async with asyncio_timeout(self.timeout_in_seconds):
+                await self._response_received_event.wait()
         except asyncio.TimeoutError:
             pass
         except asyncio.CancelledError:
@@ -311,7 +321,7 @@ class GatewayScanner:
         queue: asyncio.Queue[GatewayDescriptor | None] | None = None,
     ) -> None:
         """Verify and handle knxipframe. Callback from internal udp_transport."""
-        if not isinstance(knx_ip_frame.body, (SearchResponse, SearchResponseExtended)):
+        if not isinstance(knx_ip_frame.body, SearchResponse | SearchResponseExtended):
             logger.warning("Could not understand knxipframe")
             return
 

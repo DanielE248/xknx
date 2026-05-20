@@ -3,6 +3,7 @@ Module for Serialization and Deserialization of a KNX Tunnelling Request informa
 
 Tunnelling requests are used to transmit a KNX telegram within an existing KNX tunnel connection.
 """
+
 from __future__ import annotations
 
 from xknx.exceptions import CouldNotParseKNXIP
@@ -22,7 +23,7 @@ class TunnellingRequest(KNXIPBody):
         communication_channel_id: int = 1,
         sequence_counter: int = 0,
         raw_cemi: bytes = b"",
-    ):
+    ) -> None:
         """Initialize TunnellingRequest object."""
         self.communication_channel_id = communication_channel_id
         self.sequence_counter = sequence_counter

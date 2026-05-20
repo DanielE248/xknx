@@ -1,4 +1,5 @@
 """Encryption and Decryption functions for KNX Secure."""
+
 from __future__ import annotations
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -6,13 +7,13 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from .util import byte_pad
+from .util import Buffer, byte_pad
 
 
 def calculate_message_authentication_code_cbc(
     key: bytes,
     additional_data: bytes,
-    payload: bytes = b"",
+    payload: Buffer = b"",
     block_0: bytes = bytes(16),
 ) -> bytes:
     """Calculate the message authentication code (MAC) for a message with AES-CBC."""
@@ -32,7 +33,7 @@ def decrypt_ctr(
     key: bytes,
     counter_0: bytes,
     mac: bytes,
-    payload: bytes = b"",
+    payload: Buffer = b"",
 ) -> tuple[bytes, bytes]:
     """
     Decrypt data from SecureWrapper.
@@ -52,13 +53,13 @@ def encrypt_data_ctr(
     key: bytes,
     counter_0: bytes,
     mac_cbc: bytes,
-    payload: bytes = b"",
+    payload: Buffer = b"",
 ) -> tuple[bytes, bytes]:
     """
     Encrypt data with AES-CTR.
 
     Payload is expected a full Plain KNX/IP frame with header.
-    MAC shall be encrypted with coutner 0, KNXnet/IP frame with incremented counters.
+    MAC shall be encrypted with counter 0, KNXnet/IP frame with incremented counters.
     Returns a tuple of encrypted data (if there is any) and encrypted MAC.
     """
     s_cipher = Cipher(algorithms.AES(key), modes.CTR(counter_0))

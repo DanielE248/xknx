@@ -1,4 +1,5 @@
 """Unit test for RemoteValueRaw objects."""
+
 import pytest
 
 from xknx import XKNX
@@ -12,7 +13,7 @@ from xknx.telegram.apci import GroupValueWrite
 class TestRemoteValueRaw:
     """Test class for RemoteValueRaw objects."""
 
-    def test_to_knx(self):
+    def test_to_knx(self) -> None:
         """Test to_knx function with normal operation."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0)
@@ -24,7 +25,7 @@ class TestRemoteValueRaw:
         assert rv_1.to_knx(100) == DPTArray((0x64,))
         assert rv_2.to_knx(100) == DPTArray((0x00, 0x64))
 
-    def test_from_knx(self):
+    def test_from_knx(self) -> None:
         """Test from_knx function with normal operation."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0)
@@ -39,21 +40,21 @@ class TestRemoteValueRaw:
         with pytest.raises(ConversionError):
             assert rv_1.from_knx(DPTArray((256,)))
 
-    async def test_set(self):
+    async def test_set(self) -> None:
         """Test setting value."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0, group_address="1/2/3")
         rv_1 = RemoteValueRaw(xknx, payload_length=1, group_address="1/2/3")
         rv_2 = RemoteValueRaw(xknx, payload_length=2, group_address="1/2/3")
 
-        await rv_0.set(0)
+        rv_0.set(0)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTBinary(False)),
         )
-        await rv_0.set(63)
+        rv_0.set(63)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
@@ -61,14 +62,14 @@ class TestRemoteValueRaw:
             payload=GroupValueWrite(DPTBinary(0x3F)),
         )
 
-        await rv_1.set(0)
+        rv_1.set(0)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x00,))),
         )
-        await rv_1.set(63)
+        rv_1.set(63)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
@@ -76,14 +77,14 @@ class TestRemoteValueRaw:
             payload=GroupValueWrite(DPTArray((0x3F,))),
         )
 
-        await rv_2.set(0)
+        rv_2.set(0)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x00, 0x00))),
         )
-        await rv_2.set(63)
+        rv_2.set(63)
         assert xknx.telegrams.qsize() == 1
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
@@ -91,7 +92,7 @@ class TestRemoteValueRaw:
             payload=GroupValueWrite(DPTArray((0x00, 0x3F))),
         )
 
-    async def test_process(self):
+    def test_process(self) -> None:
         """Test process telegram."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0, group_address="1/0/0")
@@ -102,25 +103,25 @@ class TestRemoteValueRaw:
             destination_address=GroupAddress("1/0/0"),
             payload=GroupValueWrite(DPTBinary(0)),
         )
-        await rv_0.process(telegram)
+        rv_0.process(telegram)
         assert rv_0.value == 0
 
         telegram = Telegram(
             destination_address=GroupAddress("1/1/1"),
             payload=GroupValueWrite(DPTArray((0x64,))),
         )
-        await rv_1.process(telegram)
+        rv_1.process(telegram)
         assert rv_1.value == 100
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/2"),
             payload=GroupValueWrite(DPTArray((0x12, 0x34))),
         )
-        await rv_2.process(telegram)
+        rv_2.process(telegram)
         assert rv_2.value == 4660
 
-    async def test_to_process_error(self):
-        """Test process errornous telegram."""
+    def test_to_process_error(self) -> None:
+        """Test process erroneous telegram."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0, group_address="1/0/0")
         rv_1 = RemoteValueRaw(xknx, payload_length=1, group_address="1/1/1")
@@ -130,42 +131,42 @@ class TestRemoteValueRaw:
             destination_address=GroupAddress("1/0/0"),
             payload=GroupValueWrite(DPTArray((0x01,))),
         )
-        assert await rv_0.process(telegram) is False
+        assert rv_0.process(telegram) is False
 
         telegram = Telegram(
             destination_address=GroupAddress("1/0/0"),
             payload=GroupValueWrite(DPTArray((0x64, 0x65))),
         )
-        assert await rv_0.process(telegram) is False
+        assert rv_0.process(telegram) is False
         assert rv_0.value is None
 
         telegram = Telegram(
             destination_address=GroupAddress("1/1/1"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        assert await rv_1.process(telegram) is False
+        assert rv_1.process(telegram) is False
 
         telegram = Telegram(
             destination_address=GroupAddress("1/1/1"),
             payload=GroupValueWrite(DPTArray((0x64, 0x65))),
         )
-        assert await rv_1.process(telegram) is False
+        assert rv_1.process(telegram) is False
         assert rv_1.value is None
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/2"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        assert await rv_2.process(telegram) is False
+        assert rv_2.process(telegram) is False
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/2"),
             payload=GroupValueWrite(DPTArray((0x64,))),
         )
-        assert await rv_2.process(telegram) is False
+        assert rv_2.process(telegram) is False
         assert rv_2.value is None
 
-    def test_to_knx_error(self):
+    def test_to_knx_error(self) -> None:
         """Test to_knx function with wrong parameters."""
         xknx = XKNX()
         rv_0 = RemoteValueRaw(xknx, payload_length=0, group_address="1/0/0")

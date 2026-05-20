@@ -3,54 +3,64 @@ name: CI
 on:
   push:
     branches:
-      - '**' # run on all branches
+      - main
   pull_request:
     branches:
-      - '**' # run on all branches
+      - "**" # run on all branches
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11']
+        include:
+          - python-version: "3.10"
+            os: ubuntu-latest
+            envlist: "py310"
+          - python-version: "3.11"
+            os: ubuntu-latest
+            envlist: "py311"
+          - python-version: "3.12"
+            os: ubuntu-latest
+            envlist: "py312"
+          - python-version: "3.13"
+            os: ubuntu-latest
+            envlist: "py313"
+          - python-version: "3.14"
+            os: ubuntu-latest
+            envlist: "py314,ruff,typing,lint,pylint"
+
+          - python-version: "3.13"
+            os: macos-14
+            envlist: "py313"
+
+          - python-version: "3.13"
+            os: windows-latest
+            envlist: "py313"
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Cache pip packages
-      uses: actions/cache@v2
-      env:
-        cache-name: cache-pypi-modules
-      with:
-        # pip cache files are stored in `~/.cache/pip` on Linux
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('requirements/production.txt', 'requirements/testing.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-    - name: Cache pre-commit packages
-      uses: actions/cache@v2
-      env:
-        cache-name: cache-pre-commit
-      with:
-        # pre-commit cache files are usually stored in `~/.cache/pre-commit` on Linux
-        path: ~/.cache/pre-commit
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('.pre-commit-config.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-    - name: Install dependencies
-      run: |
-        pip install -r requirements/testing.txt
-    - name: CI
-      run: |
-        tox
-    - name: Upload coverage artifact
-      uses: actions/upload-artifact@v2.2.2
-      with:
-        name: coverage-${{ matrix.python-version }}
-        path: .coverage
+      - uses: actions/checkout@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements/production.txt
+            requirements/testing.txt
+            .pre-commit-config.yaml
+      - name: Install dependencies
+        run: |
+          pip install -r requirements/testing.txt
+      - name: CI
+        run: |
+          tox run -e "${{ matrix.envlist }}"
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .coverage
+          include-hidden-files: true
 
   coverage:
     name: Process test coverage
@@ -58,42 +68,29 @@ jobs:
     needs: ["build"]
     strategy:
       matrix:
-        python-version: ["3.11"]
+        python-version: ["3.14"]
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Cache pip packages
-      uses: actions/cache@v2
-      env:
-        cache-name: cache-pypi-modules
-      with:
-        # pip cache files are stored in `~/.cache/pip` on Linux
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('requirements/production.txt', 'requirements/testing.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-    - name: Cache pre-commit packages
-      uses: actions/cache@v2
-      env:
-        cache-name: cache-pre-commit
-      with:
-        # pre-commit cache files are usually stored in `~/.cache/pre-commit` on Linux
-        path: ~/.cache/pre-commit
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('.pre-commit-config.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-    - name: Install dependencies
-      run: |
-        pip install -r requirements/testing.txt
-    - name: Download all coverage artifacts
-      uses: actions/download-artifact@v2
-    - name: Create coverage report
-      run: |
-        coverage combine coverage*/.coverage*
-        coverage report --fail-under=94
-        coverage xml
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v1.3.2
+      - uses: actions/checkout@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements/production.txt
+            requirements/testing.txt
+            .pre-commit-config.yaml
+      - name: Install coverage.py
+        run: pip install coverage
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v8
+      - name: Create coverage report
+        run: |
+          coverage combine coverage-*/.coverage
+          coverage report --fail-under=94
+          coverage xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}

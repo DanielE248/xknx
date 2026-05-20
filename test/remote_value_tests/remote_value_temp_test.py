@@ -1,4 +1,5 @@
 """Unit test for RemoteValueSceneNumber objects."""
+
 import pytest
 
 from xknx import XKNX
@@ -12,19 +13,19 @@ from xknx.telegram.apci import GroupValueWrite
 class TestRemoteValueTemp:
     """Test class for RemoteValueTemp objects."""
 
-    def test_to_knx(self):
+    def test_to_knx(self) -> None:
         """Test to_knx function with normal operation."""
         xknx = XKNX()
         remote_value = RemoteValueTemp(xknx)
         assert remote_value.to_knx(11) == DPTArray((0x04, 0x4C))
 
-    def test_from_knx(self):
+    def test_from_knx(self) -> None:
         """Test from_knx function with normal operation."""
         xknx = XKNX()
         remote_value = RemoteValueTemp(xknx)
         assert remote_value.from_knx(DPTArray((0x04, 0x4C))) == 11
 
-    def test_to_knx_error(self):
+    def test_to_knx_error(self) -> None:
         """Test to_knx function with wrong parametern."""
         xknx = XKNX()
         remote_value = RemoteValueTemp(xknx)
@@ -33,7 +34,7 @@ class TestRemoteValueTemp:
         with pytest.raises(ConversionError):
             remote_value.to_knx("abc")
 
-    async def test_process(self):
+    def test_process(self) -> None:
         """Test process telegram."""
         xknx = XKNX()
         remote_value = RemoteValueTemp(xknx, group_address=GroupAddress("1/2/3"))
@@ -41,11 +42,11 @@ class TestRemoteValueTemp:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x04, 0x4C))),
         )
-        await remote_value.process(telegram)
+        remote_value.process(telegram)
         assert remote_value.value == 11
 
-    async def test_to_process_error(self):
-        """Test process errornous telegram."""
+    def test_to_process_error(self) -> None:
+        """Test process erroneous telegram."""
         xknx = XKNX()
         remote_value = RemoteValueTemp(xknx, group_address=GroupAddress("1/2/3"))
 
@@ -53,12 +54,12 @@ class TestRemoteValueTemp:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        assert await remote_value.process(telegram) is False
+        assert remote_value.process(telegram) is False
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x64,))),
         )
-        assert await remote_value.process(telegram) is False
+        assert remote_value.process(telegram) is False
 
         assert remote_value.value is None

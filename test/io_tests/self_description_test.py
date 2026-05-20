@@ -1,4 +1,5 @@
 """Unit test for KNX/IP Tunnelling Request/Response."""
+
 import asyncio
 from unittest.mock import Mock, patch
 
@@ -6,6 +7,8 @@ from xknx.io.self_description import DescriptionQuery, request_description
 from xknx.io.transport.udp_transport import UDPTransport
 from xknx.knxip import HPAI, DescriptionRequest, KNXIPFrame, SearchRequestExtended
 from xknx.telegram import IndividualAddress
+
+from ..conftest import EventLoopClockAdvancer
 
 
 class TestSelfDescription:
@@ -40,13 +43,19 @@ class TestSelfDescription:
         "50 08 ff fd 08 08 00 00 00 37 09 1a"
     )
 
-    async def test_description_query(self, time_travel):
+    @patch("xknx.io.transport.udp_transport.UDPTransport.send")
+    @patch("xknx.io.transport.udp_transport.UDPTransport.getsockname")
+    async def test_description_query(
+        self,
+        mock_transport_getsockname: Mock,
+        mock_transport_send: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test DescriptionQuery class."""
         local_addr = ("127.0.0.1", 12345)
         remote_addr = ("127.0.0.2", 54321)
         transport_mocked = UDPTransport(local_addr=local_addr, remote_addr=remote_addr)
-        transport_mocked.getsockname = Mock(return_value=local_addr)
-        transport_mocked.send = Mock()
+        mock_transport_getsockname.return_value = local_addr
 
         description_request = KNXIPFrame.init_from_body(
             DescriptionRequest(control_endpoint=HPAI(*local_addr))
@@ -57,8 +66,7 @@ class TestSelfDescription:
         )
         task = asyncio.create_task(description_query.start())
         await time_travel(0)
-        transport_mocked.send.assert_called_once_with(description_request)
-
+        mock_transport_send.assert_called_once_with(description_request)
         transport_mocked.data_received_callback(
             raw=self.description_response_raw, source=remote_addr
         )
@@ -68,23 +76,26 @@ class TestSelfDescription:
 
     async def test_request_description_v1(
         self,
-        time_travel,
-    ):
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test request_description function with Core v1 device."""
         local_addr = ("127.0.0.1", 12345)
         remote_addr = ("127.0.0.2", 54321)
 
-        with patch(
-            "xknx.io.self_description.UDPTransport.connect"
-        ) as transport_connect_mock, patch(
-            "xknx.io.self_description.UDPTransport.getsockname", return_value=local_addr
-        ), patch(
-            "xknx.io.self_description.UDPTransport.send"
-        ) as transport_send_mock, patch(
-            "xknx.io.self_description.UDPTransport.stop"
-        ) as transport_stop_mock, patch(
-            "xknx.io.self_description.DescriptionQuery", wraps=DescriptionQuery
-        ) as description_query_mock:
+        with (
+            patch(
+                "xknx.io.self_description.UDPTransport.connect"
+            ) as transport_connect_mock,
+            patch(
+                "xknx.io.self_description.UDPTransport.getsockname",
+                return_value=local_addr,
+            ),
+            patch("xknx.io.self_description.UDPTransport.send") as transport_send_mock,
+            patch("xknx.io.self_description.UDPTransport.stop") as transport_stop_mock,
+            patch(
+                "xknx.io.self_description.DescriptionQuery", wraps=DescriptionQuery
+            ) as description_query_mock,
+        ):
             task = asyncio.create_task(request_description(remote_addr[0]))
             await time_travel(0)
             transport_connect_mock.assert_called_once_with()
@@ -107,23 +118,26 @@ class TestSelfDescription:
 
     async def test_request_description_extended(
         self,
-        time_travel,
-    ):
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test request_description function with Core v2 device."""
         local_addr = ("127.0.0.1", 12345)
         remote_addr = ("127.0.0.2", 54321)
 
-        with patch(
-            "xknx.io.self_description.UDPTransport.connect"
-        ) as transport_connect_mock, patch(
-            "xknx.io.self_description.UDPTransport.getsockname", return_value=local_addr
-        ), patch(
-            "xknx.io.self_description.UDPTransport.send"
-        ) as transport_send_mock, patch(
-            "xknx.io.self_description.UDPTransport.stop"
-        ) as transport_stop_mock, patch(
-            "xknx.io.self_description.DescriptionQuery", wraps=DescriptionQuery
-        ) as description_query_mock:
+        with (
+            patch(
+                "xknx.io.self_description.UDPTransport.connect"
+            ) as transport_connect_mock,
+            patch(
+                "xknx.io.self_description.UDPTransport.getsockname",
+                return_value=local_addr,
+            ),
+            patch("xknx.io.self_description.UDPTransport.send") as transport_send_mock,
+            patch("xknx.io.self_description.UDPTransport.stop") as transport_stop_mock,
+            patch(
+                "xknx.io.self_description.DescriptionQuery", wraps=DescriptionQuery
+            ) as description_query_mock,
+        ):
             task = asyncio.create_task(request_description(remote_addr[0]))
             await time_travel(0)
             transport_connect_mock.assert_called_once_with()

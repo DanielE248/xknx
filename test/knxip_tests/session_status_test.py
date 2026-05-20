@@ -1,4 +1,5 @@
 """Unit test for KNX/IP SessionStatus objects."""
+
 from xknx.knxip import KNXIPFrame, SessionStatus
 from xknx.knxip.knxip_enum import SecureSessionStatusCode
 
@@ -6,7 +7,7 @@ from xknx.knxip.knxip_enum import SecureSessionStatusCode
 class TestKNXIPSessionStatus:
     """Test class for KNX/IP SessionStatus objects."""
 
-    def test_session_status(self):
+    def test_session_status(self) -> None:
         """Test parsing and streaming session status KNX/IP packet."""
         raw = bytes.fromhex(
             "06 10 09 54 00 08"  # KNXnet/IP header

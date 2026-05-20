@@ -3,6 +3,7 @@ Module for managing a Scaling remote value.
 
 DPT 5.001.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -10,27 +11,27 @@ from typing import TYPE_CHECKING
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.exceptions import CouldNotParseTelegram
 
-from .remote_value import AsyncCallbackType, GroupAddressesType, RemoteValue
+from .remote_value import GroupAddressesType, RemoteValue, RVCallbackType
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 
-class RemoteValueScaling(RemoteValue[DPTArray, int]):
+class RemoteValueScaling(RemoteValue[int]):
     """Abstraction for remote value of KNX DPT 5.001 (DPT_Scaling)."""
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Value",
-        after_update_cb: AsyncCallbackType | None = None,
+        after_update_cb: RVCallbackType[int] | None = None,
         range_from: int = 0,
         range_to: int = 100,
-    ):
+    ) -> None:
         """Initialize remote value of KNX DPT 5.001 (DPT_Scaling)."""
         super().__init__(
             xknx,
@@ -44,20 +45,16 @@ class RemoteValueScaling(RemoteValue[DPTArray, int]):
         self.range_from = range_from
         self.range_to = range_to
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTArray:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTArray) and len(payload.value) == 1:
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
-
     def to_knx(self, value: float) -> DPTArray:
         """Convert value to payload."""
         knx_value = self._calc_to_knx(self.range_from, self.range_to, value)
         return DPTArray(knx_value)
 
-    def from_knx(self, payload: DPTArray) -> int:
+    def from_knx(self, payload: DPTArray | DPTBinary) -> int:
         """Convert current payload to value."""
-        return self._calc_from_knx(self.range_from, self.range_to, payload.value[0])
+        if isinstance(payload, DPTArray) and len(payload.value) == 1:
+            return self._calc_from_knx(self.range_from, self.range_to, payload.value[0])
+        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
 
     @property
     def unit_of_measurement(self) -> str | None:

@@ -3,6 +3,7 @@ Base class for sending a specific type of KNX/IP Packet to a KNX/IP device and w
 
 Will report if the corresponding answer was not received.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +12,7 @@ import logging
 from xknx.exceptions import CommunicationError
 from xknx.io.transport import KNXIPTransport
 from xknx.knxip import HPAI, ErrorCode, KNXIPBody, KNXIPBodyResponse, KNXIPFrame
+from xknx.util import asyncio_timeout
 
 logger = logging.getLogger("xknx.log")
 
@@ -23,7 +25,7 @@ class RequestResponse:
         transport: KNXIPTransport,
         awaited_response_class: type[KNXIPBody],
         timeout_in_seconds: float = 1.0,
-    ):
+    ) -> None:
         """Initialize RequstResponse class."""
         self.transport = transport
         self.awaited_response_class: type[KNXIPBody] = awaited_response_class
@@ -44,10 +46,8 @@ class RequestResponse:
         )
         try:
             await self.send_request()
-            await asyncio.wait_for(
-                self.response_received_event.wait(),
-                timeout=self.timeout_in_seconds,
-            )
+            async with asyncio_timeout(self.timeout_in_seconds):
+                await self.response_received_event.wait()
         except asyncio.TimeoutError:
             logger.debug(
                 "Error: KNX bus did not respond in time (%s secs) to request of type '%s'",

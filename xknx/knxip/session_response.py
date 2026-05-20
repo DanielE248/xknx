@@ -4,6 +4,7 @@ Module for Serialization and Deserialization of KNX Session Responses.
 The SESSION_RESPONSE shall be sent by the KNXnet/IP secure server to the secure
 client's control endpoint in response to a received secure session request frame.
 """
+
 from __future__ import annotations
 
 from typing import Final
@@ -19,7 +20,7 @@ class SessionResponse(KNXIPBody):
 
     SERVICE_TYPE = KNXIPServiceType.SESSION_RESPONSE
     # 2 octets secure session identifier
-    # 32 octets for the servers’s ECDH public value
+    # 32 octets for the servers ECDH public value
     # 16 octets for the message authentication code
     LENGTH: Final = 50
 
@@ -28,7 +29,7 @@ class SessionResponse(KNXIPBody):
         secure_session_id: int = 0,
         ecdh_server_public_key: bytes = bytes(32),
         message_authentication_code: bytes = bytes(16),
-    ):
+    ) -> None:
         """Initialize SessionResponse object."""
         self.ecdh_server_public_key = ecdh_server_public_key
         # secure session identifier 0 shall in general be reserved for

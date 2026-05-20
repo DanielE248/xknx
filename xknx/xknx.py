@@ -1,22 +1,21 @@
 """XKNX is an Asynchronous Python module for reading and writing KNX/IP packets."""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
 import logging
 from logging.handlers import TimedRotatingFileHandler
-import os
+from pathlib import Path
 import signal
 from sys import platform
 from types import TracebackType
-from typing import Callable
 
 from xknx.cemi import CEMIHandler
 from xknx.core import (
     ConnectionManager,
+    GroupAddressDPT,
     TaskRegistry,
     TelegramQueue,
-    XknxConnectionState,
 )
 from xknx.core.state_updater import StateUpdater, TrackerOptionType
 from xknx.devices import Device, Devices
@@ -29,6 +28,11 @@ from xknx.io import (
 )
 from xknx.management import Management
 from xknx.telegram import GroupAddress, GroupAddressType, IndividualAddress, Telegram
+from xknx.typing import (
+    ConnectionChangeCallbackType,
+    DeviceCallbackType,
+    TelegramCallbackType,
+)
 
 from .__version__ import __version__ as VERSION
 
@@ -38,13 +42,33 @@ logger = logging.getLogger("xknx.log")
 class XKNX:
     """Class for reading and writing KNX/IP packets."""
 
+    __slots__ = (
+        "cemi_handler",
+        "connection_manager",
+        "current_address",
+        "daemon_mode",
+        "devices",
+        "group_address_dpt",
+        "knxip_interface",
+        "management",
+        "multicast_group",
+        "multicast_port",
+        "rate_limit",
+        "sigint_received",
+        "started",
+        "state_updater",
+        "task_registry",
+        "telegram_queue",
+        "telegrams",
+        "version",
+    )
+
     def __init__(
         self,
         address_format: GroupAddressType = GroupAddressType.LONG,
-        telegram_received_cb: Callable[[Telegram], Awaitable[None]] | None = None,
-        device_updated_cb: Callable[[Device], Awaitable[None]] | None = None,
-        connection_state_changed_cb: Callable[[XknxConnectionState], Awaitable[None]]
-        | None = None,
+        telegram_received_cb: TelegramCallbackType | None = None,
+        device_updated_cb: DeviceCallbackType[Device] | None = None,
+        connection_state_changed_cb: ConnectionChangeCallbackType | None = None,
         rate_limit: int = 0,
         multicast_group: str = DEFAULT_MCAST_GRP,
         multicast_port: int = DEFAULT_MCAST_PORT,
@@ -55,7 +79,6 @@ class XKNX:
     ) -> None:
         """Initialize XKNX class."""
         self.connection_manager = ConnectionManager()
-        self.devices = Devices()
         self.knxip_interface = knx_interface_factory(
             self, connection_config=connection_config or ConnectionConfig()
         )
@@ -65,6 +88,7 @@ class XKNX:
         self.cemi_handler = CEMIHandler(self)
         self.state_updater = StateUpdater(self, default_tracker_option=state_updater)
         self.task_registry = TaskRegistry(self)
+        self.group_address_dpt = GroupAddressDPT()
 
         self.current_address = IndividualAddress(0)
         self.daemon_mode = daemon_mode
@@ -73,6 +97,7 @@ class XKNX:
         self.rate_limit = rate_limit
         self.sigint_received = asyncio.Event()
         self.started = asyncio.Event()
+        self.devices = Devices(started=self.started)
         self.version = VERSION
 
         GroupAddress.address_format = address_format  # for global string representation
@@ -99,7 +124,7 @@ class XKNX:
             except RuntimeError as exp:
                 logger.warning("Could not close loop, reason: %s", exp)
 
-    async def __aenter__(self) -> "XKNX":
+    async def __aenter__(self) -> XKNX:
         """Start XKNX from context manager."""
         await self.start()
         return self
@@ -126,6 +151,7 @@ class XKNX:
         await self.knxip_interface.start()
         await self.telegram_queue.start()
         self.state_updater.start()
+        self.devices.async_start_device_tasks()
         self.started.set()
         if self.daemon_mode:
             await self.loop_until_sigint()
@@ -136,6 +162,7 @@ class XKNX:
 
     async def stop(self) -> None:
         """Stop XKNX module."""
+        self.devices.async_remove_device_tasks()
         self.task_registry.stop()
         self.state_updater.stop()
         await self.join()
@@ -168,12 +195,13 @@ class XKNX:
     @staticmethod
     def setup_logging(log_directory: str) -> None:
         """Configure logging to file."""
-        if not os.path.isdir(log_directory):
+        log_path = Path(log_directory)
+        if not log_path.is_dir():
             logger.warning("The provided log directory does not exist.")
             return
 
         _handler = TimedRotatingFileHandler(
-            filename=f"{log_directory}{os.sep}xknx.log",
+            filename=log_path / "xknx.log",
             when="midnight",
             backupCount=7,
             encoding="utf-8",

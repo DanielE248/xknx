@@ -1,6 +1,9 @@
 """Unit test for XKNX Module."""
-import os
-from unittest.mock import AsyncMock, patch
+
+import logging
+from pathlib import Path
+import tempfile
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -12,34 +15,39 @@ from xknx.io import ConnectionConfig, ConnectionType
 class TestXknxModule:
     """Test class for XKNX."""
 
-    def test_log_to_file(self):
+    def test_log_to_file(self) -> None:
         """Test logging enable."""
-        XKNX(log_directory="/tmp/")
-        assert os.path.isfile("/tmp/xknx.log")
-        os.remove("/tmp/xknx.log")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            XKNX(log_directory=tmpdir)
+            _path = Path(f"{tmpdir}/xknx.log")
+            assert _path.is_file()
 
-    def test_log_to_file_when_dir_does_not_exist(self):
+            # Needed for Windows to release the logging file
+            logging.shutdown()
+            _path.unlink()
+
+    def test_log_to_file_when_dir_does_not_exist(self) -> None:
         """Test logging enable with non existent directory."""
         XKNX(log_directory="/xknx/is/fun")
-        assert not os.path.isfile("/xknx/is/fun/xknx.log")
+        assert not Path("/xknx/is/fun/xknx.log").is_file()
 
-    def test_register_telegram_cb(self):
+    def test_register_telegram_cb(self) -> None:
         """Test register telegram callback."""
         xknx = XKNX(telegram_received_cb=AsyncMock())
         assert len(xknx.telegram_queue.telegram_received_cbs) == 1
 
-    def test_register_device_cb(self):
+    def test_register_device_cb(self) -> None:
         """Test register telegram callback."""
         xknx = XKNX(device_updated_cb=AsyncMock())
         assert len(xknx.devices.device_updated_cbs) == 1
 
-    def test_register_connection_state_change_cb(self):
+    def test_register_connection_state_change_cb(self) -> None:
         """Test register con state callback."""
-        xknx = XKNX(connection_state_changed_cb=AsyncMock())
+        xknx = XKNX(connection_state_changed_cb=Mock())
         assert len(xknx.connection_manager._connection_state_changed_cbs) == 1
 
     @patch("xknx.io.KNXIPInterface._start", new_callable=AsyncMock)
-    async def test_xknx_start(self, start_mock):
+    async def test_xknx_start(self, start_mock: AsyncMock) -> None:
         """Test xknx start."""
         xknx = XKNX(state_updater=True)
 
@@ -48,7 +56,9 @@ class TestXknxModule:
         await xknx.stop()
 
     @patch("xknx.io.KNXIPInterface._start", new_callable=AsyncMock)
-    async def test_xknx_start_as_context_manager(self, ipinterface_mock):
+    async def test_xknx_start_as_context_manager(
+        self, ipinterface_mock: AsyncMock
+    ) -> None:
         """Test xknx start."""
         async with XKNX(state_updater=True) as xknx:
             assert xknx.started.is_set()
@@ -56,8 +66,8 @@ class TestXknxModule:
 
     @patch("xknx.io.KNXIPInterface._start", new_callable=AsyncMock)
     async def test_xknx_start_and_stop_with_dedicated_connection_config(
-        self, start_mock
-    ):
+        self, start_mock: AsyncMock
+    ) -> None:
         """Test xknx start and stop with connection config."""
         connection_config = ConnectionConfig(connection_type=ConnectionType.TUNNELING)
         xknx = XKNX(connection_config=connection_config)
@@ -89,8 +99,8 @@ class TestXknxModule:
         side_effect=OSError,
     )
     async def test_xknx_start_initial_connection_error(
-        self, transport_connect_mock, connection_config
-    ):
+        self, transport_connect_mock: AsyncMock, connection_config: ConnectionConfig
+    ) -> None:
         """Test xknx start raising when socket can't be set up."""
         xknx = XKNX(
             state_updater=True,

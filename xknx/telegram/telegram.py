@@ -1,22 +1,11 @@
-"""
-Module for KNX Telegrams.
+"""Module for KNX Telegrams."""
 
-The telegram class is the leightweight interaction object between
-
-* business logic (Lights, Covers, etc) and
-* underlaying KNX/IP abstraction (KNX-Routing/KNX-Tunneling).
-
-It contains
-
-* the direction (incoming or outgoing)
-* the group address (e.g. 1/2/3)
-* and the payload (e.g. GroupValueWrite("12%")).
-
-"""
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass, field
 from enum import Enum
+
+from xknx.dpt import DPTBase, DPTComplexData, DPTEnumData
 
 from .address import GroupAddress, IndividualAddress, InternalGroupAddress
 from .apci import APCI
@@ -30,75 +19,87 @@ class TelegramDirection(Enum):
     OUTGOING = "Outgoing"
 
 
-class Telegram:
-    """Class for KNX telegrams."""
+@dataclass(slots=True)
+class TelegramDecodedData:
+    """Context for a telegram."""
 
-    def __init__(
-        self,
-        destination_address: GroupAddress
-        | IndividualAddress
-        | InternalGroupAddress
-        | None = None,
-        direction: TelegramDirection = TelegramDirection.OUTGOING,
-        payload: APCI | None = None,
-        source_address: IndividualAddress | None = None,
-        tpci: TPCI | None = None,
-    ) -> None:
+    transcoder: type[DPTBase]
+    value: bool | int | float | str | DPTComplexData | DPTEnumData
+
+    def __str__(self) -> str:
+        """Return object as readable string."""
+        return (
+            f"{self.value}{' ' + self.transcoder.unit if self.transcoder.unit is not None else ''}"
+            f" ({self.transcoder.dpt_name()})"
+        )
+
+
+@dataclass(slots=True)
+class Telegram:
+    """
+    Data transfer object for KNX telegrams.
+
+    Represents a message exchanged on the KNX bus between the business logic
+    (Devices, Management, etc.) and the underlying KNX/IP abstraction layer.
+
+    Attributes:
+        destination_address: Target GroupAddress, IndividualAddress, or
+            InternalGroupAddress.
+        direction: Communication direction (INCOMING or OUTGOING).
+        payload: APCi payload containing the actual data (e.g., GroupValueWrite,
+            GroupValueResponse). None for control information only telegrams.
+        source_address: IndividualAddress of the sender. When default of 0.0.0 is
+            used, it will be set automatically when sent.
+        tpci: Transport Layer Control Information (TDataBroadcast, TDataGroup, or
+            TDataIndividual). If not provided, it will be automatically inferred
+            based on destination_address type.
+        decoded_data: Optional decoded version of the payload including the
+            transcoder class and decoded value. Set externally by GroupAddressDPT
+            for convenience when the payload has already been decoded.
+        data_secure: Flag indicating if the telegram was sent or received as
+            DataSecure. Set externally by CEMIHandler. None if not yet processed.
+
+    """
+
+    destination_address: GroupAddress | IndividualAddress | InternalGroupAddress
+    direction: TelegramDirection = TelegramDirection.OUTGOING
+    payload: APCI | None = None
+    source_address: IndividualAddress = field(
+        default_factory=lambda: IndividualAddress(0)
+    )
+    tpci: TPCI = None  # type: ignore[assignment]  # set by initializer or in __post_init__
+    # set by GroupAddressDPT
+    decoded_data: TelegramDecodedData | None = field(
+        init=False, default=None, compare=False, hash=False
+    )
+    # flag if telegram was sent or received as DataSecure, set by CEMIHandler
+    data_secure: bool | None = field(
+        init=False, default=None, compare=False, hash=False
+    )
+
+    def __post_init__(self) -> None:
         """Initialize Telegram class."""
-        self.destination_address = destination_address or GroupAddress(0)
-        self.direction = direction
-        self.payload = payload
-        self.source_address = source_address or IndividualAddress(0)
-        self.timestamp = datetime.now()
-        self.tpci: TPCI
-        if tpci is None:
-            if isinstance(destination_address, GroupAddress):
-                if destination_address.raw == 0:
+        if self.tpci is None:
+            if isinstance(self.destination_address, GroupAddress):  # type: ignore[unreachable]
+                if self.destination_address.raw == 0:
                     self.tpci = TDataBroadcast()
                 else:
                     self.tpci = TDataGroup()
-            elif isinstance(destination_address, IndividualAddress):
+            elif isinstance(self.destination_address, IndividualAddress):
                 self.tpci = TDataIndividual()
             else:  # InternalGroupAddress
                 self.tpci = TDataGroup()
-        else:
-            self.tpci = tpci
 
     def __str__(self) -> str:
         """Return object as readable string."""
         data = f'payload="{self.payload}"' if self.payload else f'tpci="{self.tpci}"'
+        decoded_data = (
+            f' data="{self.decoded_data}"' if self.decoded_data is not None else ""
+        )
         return (
             "<Telegram "
             f'direction="{self.direction.value}" '
             f'source_address="{self.source_address}" '
             f'destination_address="{self.destination_address}" '
-            f"{data} />"
+            f"{data}{decoded_data} />"
         )
-
-    def __repr__(self) -> str:
-        """Return object as string representation."""
-        return (
-            "Telegram("
-            f"destination_address={self.destination_address}, "
-            f"direction={self.direction}, "
-            f"payload={self.payload}, "
-            f"source_address={self.source_address}, "
-            f"tpci={self.tpci}"
-            ")"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        """Equal operator."""
-        for key, value in self.__dict__.items():
-            if key == "timestamp":
-                continue
-            if key not in other.__dict__:
-                return False
-            if other.__dict__[key] != value:
-                return False
-        return all(key in self.__dict__ for key in other.__dict__)
-
-    def __hash__(self) -> int:
-        """Hash function."""
-        # used to turn lists of Telegram into sets in unittests
-        return hash(repr(self))

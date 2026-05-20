@@ -1,5 +1,7 @@
 """Unit test for KNX/IP gateway scanner."""
+
 import asyncio
+from typing import Any
 from unittest.mock import Mock, create_autospec, patch
 
 import pytest
@@ -21,6 +23,8 @@ from xknx.knxip import (
     SearchResponseExtended,
 )
 from xknx.telegram import IndividualAddress
+
+from ..conftest import EventLoopClockAdvancer
 
 
 class TestGatewayDescriptor:
@@ -46,6 +50,9 @@ class TestGatewayDescriptor:
                     "supports_secure": True,
                     "routing_requires_secure": False,
                     "tunnelling_requires_secure": True,
+                    "serial_number": "00:83:7b:40:05:45",
+                    "mac_address": "cc:1b:e0:80:b8:01",
+                    "multicast_address": "0.0.0.0",
                 },
             ),
             (
@@ -62,6 +69,9 @@ class TestGatewayDescriptor:
                     "supports_secure": False,
                     "routing_requires_secure": None,
                     "tunnelling_requires_secure": None,
+                    "serial_number": "00:83:47:7f:01:24",
+                    "mac_address": "cc:1b:e0:80:04:c4",
+                    "multicast_address": "224.0.23.12",
                 },
             ),
             (
@@ -79,6 +89,9 @@ class TestGatewayDescriptor:
                     "supports_secure": True,
                     "routing_requires_secure": None,
                     "tunnelling_requires_secure": None,
+                    "serial_number": "00:08:11:71:01:26",
+                    "mac_address": "00:0a:b3:29:0b:13",
+                    "multicast_address": "0.0.0.0",
                 },
             ),
             (
@@ -96,6 +109,9 @@ class TestGatewayDescriptor:
                     "supports_secure": True,
                     "routing_requires_secure": None,
                     "tunnelling_requires_secure": None,
+                    "serial_number": "00:08:2d:40:83:4d",
+                    "mac_address": "00:0a:b3:27:4a:32",
+                    "multicast_address": "224.0.23.12",
                 },
             ),
             (
@@ -113,6 +129,9 @@ class TestGatewayDescriptor:
                     "supports_secure": True,
                     "routing_requires_secure": None,
                     "tunnelling_requires_secure": None,
+                    "serial_number": "00:a6:15:00:00:37",
+                    "mac_address": "00:22:d1:04:00:37",
+                    "multicast_address": "224.0.23.12",
                 },
             ),
             (
@@ -131,14 +150,17 @@ class TestGatewayDescriptor:
                     "supports_secure": True,
                     "routing_requires_secure": True,
                     "tunnelling_requires_secure": True,
+                    "serial_number": "00:a6:15:00:00:37",
+                    "mac_address": "00:22:d1:04:00:37",
+                    "multicast_address": "224.0.23.12",
                 },
             ),
         ],
     )
-    def test_parser(self, raw, expected):
+    def test_parser(self, raw: bytes, expected: dict[str, Any]) -> None:
         """Test parsing GatewayDescriptor objects from real-world responses."""
         response, _ = KNXIPFrame.from_knx(raw)
-        assert isinstance(response.body, (SearchResponse, SearchResponseExtended))
+        assert isinstance(response.body, SearchResponse | SearchResponseExtended)
 
         descriptor = GatewayDescriptor(
             ip_addr=response.body.control_endpoint.ip_addr,
@@ -157,6 +179,9 @@ class TestGatewayDescriptor:
             descriptor.tunnelling_requires_secure
             is expected["tunnelling_requires_secure"]
         )
+        assert descriptor.serial_number == expected["serial_number"]
+        assert descriptor.mac_address == expected["mac_address"]
+        assert descriptor.multicast_address == expected["multicast_address"]
 
 
 class TestGatewayScanner:
@@ -224,7 +249,7 @@ class TestGatewayScanner:
     )
     gateway_desc_secure_router.routing_requires_secure = True
 
-    def test_gateway_scan_filter_match(self):
+    def test_gateway_scan_filter_match(self) -> None:
         """Test match function of gateway filter."""
         filter_default = GatewayScanFilter()
         filter_tunnel = GatewayScanFilter(routing=False, secure_routing=False)
@@ -307,7 +332,7 @@ class TestGatewayScanner:
         assert not filter_secure_router.match(self.gateway_desc_secure_tunnel)
         assert filter_secure_router.match(self.gateway_desc_secure_router)
 
-    def test_search_response_reception(self):
+    def test_search_response_reception(self) -> None:
         """Test function of gateway scanner."""
         xknx = XKNX()
         gateway_scanner = GatewayScanner(xknx)
@@ -333,9 +358,13 @@ class TestGatewayScanner:
         )
         assert len(gateway_scanner.found_gateways) == 1
 
-        assert str(
-            gateway_scanner.found_gateways[test_search_response.body.control_endpoint]
-        ) == str(self.gateway_desc_both)
+        found_gateway = gateway_scanner.found_gateways[
+            test_search_response.body.control_endpoint
+        ]
+        assert str(found_gateway) == str(self.gateway_desc_both)
+        assert found_gateway.multicast_address == "224.0.23.12"
+        assert found_gateway.serial_number == "11:22:33:44:55:66"
+        assert found_gateway.mac_address == "01:02:03:04:05:06"
 
     @patch("xknx.io.gateway_scanner.UDPTransport.connect")
     @patch("xknx.io.gateway_scanner.UDPTransport.send")
@@ -345,30 +374,30 @@ class TestGatewayScanner:
     )
     async def test_scan_timeout(
         self,
-        getsockname_mock,
-        udp_transport_send_mock,
-        udp_transport_connect_mock,
-        time_travel,
-    ):
+        getsockname_mock: Mock,
+        udp_transport_send_mock: Mock,
+        udp_transport_connect_mock: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test gateway scanner timeout."""
         xknx = XKNX()
         gateway_scanner = GatewayScanner(xknx)
         timed_out_scan_task = asyncio.create_task(gateway_scanner.scan())
         await time_travel(gateway_scanner.timeout_in_seconds)
-        # Unsuccessfull scan() returns empty list
+        # Unsuccessful scan() returns empty list
         assert await timed_out_scan_task == []
 
     @patch("xknx.io.gateway_scanner.UDPTransport.connect")
     @patch("xknx.io.gateway_scanner.UDPTransport.send")
     async def test_async_scan_timeout(
         self,
-        udp_transport_send_mock,
-        udp_transport_connect_mock,
-        time_travel,
-    ):
+        udp_transport_send_mock: Mock,
+        udp_transport_connect_mock: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test gateway scanner timeout for async generator."""
 
-        async def test():
+        async def test() -> bool:
             xknx = XKNX()
             async for _ in GatewayScanner(xknx).async_scan():
                 break
@@ -376,12 +405,15 @@ class TestGatewayScanner:
                 return True
 
         # timeout
-        with patch(
-            "xknx.io.util.get_default_local_ip",
-            return_value="10.1.1.2",
-        ), patch(
-            "xknx.io.gateway_scanner.UDPTransport.getsockname",
-            return_value=("10.1.1.2", 56789),
+        with (
+            patch(
+                "xknx.io.util.get_default_local_ip",
+                return_value="10.1.1.2",
+            ),
+            patch(
+                "xknx.io.gateway_scanner.UDPTransport.getsockname",
+                return_value=("10.1.1.2", 56789),
+            ),
         ):
             timed_out_scan_task = asyncio.create_task(test())
             await time_travel(3)
@@ -400,10 +432,10 @@ class TestGatewayScanner:
     @patch("xknx.io.gateway_scanner.UDPTransport.send")
     async def test_async_scan_exit(
         self,
-        udp_transport_send_mock,
-        udp_transport_connect_mock,
-        time_travel,
-    ):
+        udp_transport_send_mock: Mock,
+        udp_transport_connect_mock: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test gateway scanner timeout for async generator."""
         xknx = XKNX()
         test_search_response = fake_router_search_response()
@@ -412,18 +444,21 @@ class TestGatewayScanner:
 
         gateway_scanner = GatewayScanner(xknx, local_ip="10.1.1.2")
 
-        async def test():
+        async def test() -> bool:
             async for gateway in gateway_scanner.async_scan():
                 assert isinstance(gateway, GatewayDescriptor)
                 return True
             return False
 
-        with patch(
-            "xknx.io.gateway_scanner.UDPTransport.getsockname",
-            return_value=("10.1.1.2", 56789),
-        ), patch(
-            "xknx.io.gateway_scanner.UDPTransport.register_callback"
-        ) as register_callback_mock:
+        with (
+            patch(
+                "xknx.io.gateway_scanner.UDPTransport.getsockname",
+                return_value=("10.1.1.2", 56789),
+            ),
+            patch(
+                "xknx.io.gateway_scanner.UDPTransport.register_callback"
+            ) as register_callback_mock,
+        ):
             scan_task = asyncio.create_task(test())
             await time_travel(0)
             _fished_response_rec_callback = register_callback_mock.call_args.args[0]
@@ -439,21 +474,25 @@ class TestGatewayScanner:
     @patch("xknx.io.gateway_scanner.UDPTransport.send")
     async def test_send_search_requests(
         self,
-        udp_transport_send_mock,
-        udp_transport_connect_mock,
-    ):
+        udp_transport_send_mock: Mock,
+        udp_transport_connect_mock: Mock,
+    ) -> None:
         """Test if both search requests are sent per interface."""
         xknx = XKNX()
         gateway_scanner = GatewayScanner(xknx, timeout_in_seconds=0)
-        with patch(
-            "xknx.io.util.get_default_local_ip",
-            return_value="10.1.1.2",
-        ), patch(
-            "xknx.io.util.get_local_interface_name",
-            return_value="en_0123",
-        ), patch(
-            "xknx.io.gateway_scanner.UDPTransport.getsockname",
-            return_value=("10.1.1.2", 56789),
+        with (
+            patch(
+                "xknx.io.util.get_default_local_ip",
+                return_value="10.1.1.2",
+            ),
+            patch(
+                "xknx.io.util.get_local_interface_name",
+                return_value="en_0123",
+            ),
+            patch(
+                "xknx.io.gateway_scanner.UDPTransport.getsockname",
+                return_value=("10.1.1.2", 56789),
+            ),
         ):
             await gateway_scanner.scan()
 
@@ -465,7 +504,7 @@ class TestGatewayScanner:
         assert isinstance(frame_2.body, SearchRequest)
         assert frame_1.body.discovery_endpoint == HPAI(ip_addr="10.1.1.2", port=56789)
 
-    def test_gateway_scan_filter_compare(self):
+    def test_gateway_scan_filter_compare(self) -> None:
         """Test GatewayScanFilter comparison."""
         assert GatewayScanFilter() == GatewayScanFilter()
         assert GatewayScanFilter() != GatewayScanFilter(tunnelling=False)

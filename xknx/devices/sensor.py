@@ -6,17 +6,19 @@ It provides functionality for
 * reading the current state from KNX bus.
 * watching for state updates from KNX bus.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
+from xknx.dpt import DPTBase
 from xknx.remote_value import (
     GroupAddressesType,
     RemoteValue,
-    RemoteValueControl,
     RemoteValueSensor,
 )
+from xknx.typing import DPTParsable
 
 from .device import Device, DeviceCallbackType
 
@@ -32,42 +34,25 @@ class Sensor(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address_state: GroupAddressesType | None = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         always_callback: bool = False,
-        value_type: int | str | None = None,
+        value_type: DPTParsable | type[DPTBase] | None = None,
         device_updated_cb: DeviceCallbackType[Sensor] | None = None,
-    ):
+    ) -> None:
         """Initialize Sensor class."""
         super().__init__(xknx, name, device_updated_cb)
-
-        self.sensor_value: RemoteValueControl | RemoteValueSensor
-        if isinstance(value_type, str) and value_type in [
-            "stepwise_dimming",
-            "stepwise_blinds",
-            "startstop_dimming",
-            "startstop_blinds",
-        ]:
-            self.sensor_value = RemoteValueControl(
-                xknx,
-                group_address_state=group_address_state,
-                sync_state=sync_state,
-                value_type=value_type,
-                device_name=self.name,
-                after_update_cb=self.after_update,
-            )
-        else:
-            self.sensor_value = RemoteValueSensor(
-                xknx,
-                group_address_state=group_address_state,
-                sync_state=sync_state,
-                value_type=value_type,
-                device_name=self.name,
-                after_update_cb=self.after_update,
-            )
+        self.sensor_value = RemoteValueSensor(
+            xknx,
+            group_address_state=group_address_state,
+            sync_state=sync_state,
+            value_type=value_type,
+            device_name=self.name,
+            after_update_cb=self.after_update,
+        )
         self.always_callback = always_callback
 
-    def _iter_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices RemoteValue classes."""
         yield self.sensor_value
 
@@ -76,13 +61,13 @@ class Sensor(Device):
         """Return the last telegram received from the RemoteValue."""
         return self.sensor_value.telegram
 
-    async def process_group_write(self, telegram: "Telegram") -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
-        await self.sensor_value.process(telegram, always_callback=self.always_callback)
+        self.sensor_value.process(telegram, always_callback=self.always_callback)
 
-    async def process_group_response(self, telegram: "Telegram") -> None:
+    def process_group_response(self, telegram: Telegram) -> None:
         """Process incoming GroupValueResponse telegrams."""
-        await self.sensor_value.process(telegram)
+        self.sensor_value.process(telegram, always_callback=self.always_callback)
 
     def unit_of_measurement(self) -> str | None:
         """Return the unit of measurement."""

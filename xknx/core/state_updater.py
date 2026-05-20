@@ -1,11 +1,12 @@
 """Module for keeping the value of a RemoteValue from KNX bus up to date."""
+
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from enum import Enum
 import logging
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Union
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from xknx.core import XknxConnectionState
 from xknx.remote_value import RemoteValue
@@ -27,18 +28,27 @@ class TrackerOptions(NamedTuple):
     update_interval_min: int | float
 
 
-TrackerOptionType = Union[bool, int, float, str, TrackerOptions]
+TrackerOptionType = bool | int | float | str | TrackerOptions
 
 
 class StateUpdater:
     """Class for keeping the states of RemoteValues up to date."""
+
+    __slots__ = (
+        "_default_tracker_option",
+        "_semaphore",
+        "_workers",
+        "default_use_updater",
+        "started",
+        "xknx",
+    )
 
     def __init__(
         self,
         xknx: XKNX,
         default_tracker_option: TrackerOptionType,
         parallel_reads: int = 2,
-    ):
+    ) -> None:
         """Initialize StateUpdater class."""
         self.xknx = xknx
         self.started = False
@@ -97,7 +107,7 @@ class StateUpdater:
         tracker_type = self._default_tracker_option.tracker_type
         update_interval: int | float = self._default_tracker_option.update_interval_min
 
-        if isinstance(tracker_options, (int, float)):
+        if isinstance(tracker_options, int | float):
             update_interval = check_update_interval(tracker_options)
         elif isinstance(tracker_options, str):
             _options = tracker_options.split()
@@ -126,7 +136,7 @@ class StateUpdater:
 
     def register_remote_value(
         self,
-        remote_value: RemoteValue[Any, Any],
+        remote_value: RemoteValue[Any],
         tracker_options: TrackerOptionType = True,
     ) -> None:
         """Register a RemoteValue to initialize its state and/or track for expiration."""
@@ -162,11 +172,11 @@ class StateUpdater:
         if self.started:
             tracker.start()
 
-    def unregister_remote_value(self, remote_value: RemoteValue[Any, Any]) -> None:
+    def unregister_remote_value(self, remote_value: RemoteValue[Any]) -> None:
         """Unregister a RemoteValue from StateUpdater."""
         self._workers.pop(id(remote_value)).stop()
 
-    def update_received(self, remote_value: RemoteValue[Any, Any]) -> None:
+    def update_received(self, remote_value: RemoteValue[Any]) -> None:
         """Reset the timer when a state update was received."""
         if self.started and id(remote_value) in self._workers:
             self._workers[id(remote_value)].update_received()
@@ -202,9 +212,7 @@ class StateUpdater:
 
         self._stop()
 
-    async def connection_state_change_callback(
-        self, state: XknxConnectionState
-    ) -> None:
+    def connection_state_change_callback(self, state: XknxConnectionState) -> None:
         """Start and stop StateUpdater via connection state update."""
         if state == XknxConnectionState.CONNECTED:
             if not self.started:
@@ -224,11 +232,13 @@ class StateTrackerType(Enum):
 class _StateTracker:
     """Keeps track of the age of the state from one RemoteValue."""
 
+    __slots__ = ("_read_state", "_task", "tracker_type", "update_interval")
+
     def __init__(
         self,
         read_state_awaitable: Callable[[], Awaitable[None]],
         tracker_options: TrackerOptions,
-    ):
+    ) -> None:
         """Initialize StateTracker class."""
         self.tracker_type = tracker_options.tracker_type
         self.update_interval = tracker_options.update_interval_min * 60
@@ -265,7 +275,7 @@ class _StateTracker:
     async def _update_loop(self) -> None:
         """Wait for the update_interval to expire. Endless loop for updating states."""
         # for StateUpdaterType.EXPIRE:
-        #   on successfull read the while loop gets canceled when the callback calls update_received()
+        #   on successful read the while loop gets canceled when the callback calls update_received()
         #   when no telegram was received it will try again endlessly
         while True:
             await asyncio.sleep(self.update_interval)

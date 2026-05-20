@@ -3,6 +3,7 @@ Module for managing an DPT Switch remote value.
 
 DPT 1.001.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -10,26 +11,26 @@ from typing import TYPE_CHECKING
 from xknx.dpt import DPTArray, DPTBinary
 from xknx.exceptions import ConversionError, CouldNotParseTelegram
 
-from .remote_value import AsyncCallbackType, GroupAddressesType, RemoteValue
+from .remote_value import GroupAddressesType, RemoteValue, RVCallbackType
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 
-class RemoteValueSwitch(RemoteValue[DPTBinary, bool]):
+class RemoteValueSwitch(RemoteValue[bool]):
     """Abstraction for remote value of KNX DPT 1.001 / DPT_Switch."""
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "State",
-        after_update_cb: AsyncCallbackType | None = None,
+        after_update_cb: RVCallbackType[bool] | None = None,
         invert: bool = False,
-    ):
+    ) -> None:
         """Initialize remote value of KNX DPT 1.001."""
         super().__init__(
             xknx,
@@ -42,12 +43,6 @@ class RemoteValueSwitch(RemoteValue[DPTBinary, bool]):
         )
         self.invert = bool(invert)
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTBinary:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTBinary):
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
-
     def to_knx(self, value: bool) -> DPTBinary:
         """Convert value to payload."""
         if isinstance(value, bool):
@@ -59,24 +54,24 @@ class RemoteValueSwitch(RemoteValue[DPTBinary, bool]):
             feature_name=self.feature_name,
         )
 
-    def from_knx(self, payload: DPTBinary) -> bool:
+    def from_knx(self, payload: DPTArray | DPTBinary) -> bool:
         """Convert current payload to value."""
-        if payload == DPTBinary(0):
+        if payload.value == 0:
             return self.invert
-        if payload == DPTBinary(1):
+        if payload.value == 1:
             return not self.invert
         raise CouldNotParseTelegram(
-            "payload invalid",
-            payload=payload,
+            "Payload invalid",
+            payload=str(payload),
             device_name=self.device_name,
             feature_name=self.feature_name,
         )
 
-    async def off(self) -> None:
+    def off(self) -> None:
         """Set value to OFF."""
-        await self.set(False)
+        self.set(False)
 
-    async def on(self) -> None:
+    def on(self) -> None:
         """Set value to ON."""
         # pylint: disable=invalid-name
-        await self.set(True)
+        self.set(True)

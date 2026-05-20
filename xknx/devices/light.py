@@ -10,27 +10,28 @@ It provides functionality for
 * setting the absolute color temperature.
 * reading the current state from KNX bus.
 """
+
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Iterator
+from collections.abc import Iterator
 from enum import Enum
 from itertools import chain
 import logging
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from xknx.dpt.dpt_color import XYYColor
+from xknx.core import Task
+from xknx.dpt import RGBColor, RGBWColor, XYYColor
 from xknx.remote_value import (
     GroupAddressesType,
     RemoteValue,
     RemoteValueColorRGB,
     RemoteValueColorRGBW,
     RemoteValueColorXYY,
-    RemoteValueDpt2ByteUnsigned,
     RemoteValueNumeric,
     RemoteValueScaling,
     RemoteValueSwitch,
 )
+from xknx.remote_value.remote_value import RVCallbackType
 
 from .device import Device, DeviceCallbackType
 
@@ -38,16 +39,14 @@ if TYPE_CHECKING:
     from xknx.telegram import Telegram
     from xknx.xknx import XKNX
 
-AsyncCallback = Callable[[], Awaitable[None]]
-
 logger = logging.getLogger("xknx.log")
 
 
-class ColorTempModes(Enum):
-    """Color temperature modes for config validation."""
+class ColorTemperatureType(Enum):
+    """DPT used for absolute color temperature."""
 
-    ABSOLUTE = "DPT-7.600"
-    RELATIVE = "DPT-5.001"
+    UINT_2_BYTE = "color_temperature"  # DPTColorTemperature 7.600
+    FLOAT_2_BYTE = "2byte_float"  # DPT2ByteFloat generic 9
 
 
 class _SwitchAndBrightness:
@@ -56,13 +55,13 @@ class _SwitchAndBrightness:
         xknx: XKNX,
         name: str,
         feature_name: str,
-        group_address_switch: GroupAddressesType | None = None,
-        group_address_switch_state: GroupAddressesType | None = None,
-        group_address_brightness: GroupAddressesType | None = None,
-        group_address_brightness_state: GroupAddressesType | None = None,
+        group_address_switch: GroupAddressesType = None,
+        group_address_switch_state: GroupAddressesType = None,
+        group_address_brightness: GroupAddressesType = None,
+        group_address_brightness_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
-        after_update_cb: AsyncCallback | None = None,
-    ):
+        after_update_cb: RVCallbackType[bool | int] | None = None,
+    ) -> None:
         self.switch = RemoteValueSwitch(
             xknx,
             group_address_switch,
@@ -93,21 +92,21 @@ class _SwitchAndBrightness:
             return bool(self.brightness.value)
         return None
 
-    async def set_on(self) -> None:
+    def set_on(self) -> None:
         """Switch light on."""
         if self.switch.writable:
-            await self.switch.on()
+            self.switch.on()
             return
         if self.brightness.writable:
-            await self.brightness.set(self.brightness.range_to)
+            self.brightness.set(self.brightness.range_to)
 
-    async def set_off(self) -> None:
+    def set_off(self) -> None:
         """Switch light off."""
         if self.switch.writable:
-            await self.switch.off()
+            self.switch.off()
             return
         if self.brightness.writable:
-            await self.brightness.set(0)
+            self.brightness.set(0)
 
     def __eq__(self, other: object) -> bool:
         """Compare for equality."""
@@ -125,45 +124,46 @@ class Light(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address_switch: GroupAddressesType | None = None,
-        group_address_switch_state: GroupAddressesType | None = None,
-        group_address_brightness: GroupAddressesType | None = None,
-        group_address_brightness_state: GroupAddressesType | None = None,
-        group_address_color: GroupAddressesType | None = None,
-        group_address_color_state: GroupAddressesType | None = None,
-        group_address_rgbw: GroupAddressesType | None = None,
-        group_address_rgbw_state: GroupAddressesType | None = None,
-        group_address_hue: GroupAddressesType | None = None,
-        group_address_hue_state: GroupAddressesType | None = None,
-        group_address_saturation: GroupAddressesType | None = None,
-        group_address_saturation_state: GroupAddressesType | None = None,
-        group_address_xyy_color: GroupAddressesType | None = None,
-        group_address_xyy_color_state: GroupAddressesType | None = None,
-        group_address_tunable_white: GroupAddressesType | None = None,
-        group_address_tunable_white_state: GroupAddressesType | None = None,
-        group_address_color_temperature: GroupAddressesType | None = None,
-        group_address_color_temperature_state: GroupAddressesType | None = None,
-        group_address_switch_red: GroupAddressesType | None = None,
-        group_address_switch_red_state: GroupAddressesType | None = None,
-        group_address_brightness_red: GroupAddressesType | None = None,
-        group_address_brightness_red_state: GroupAddressesType | None = None,
-        group_address_switch_green: GroupAddressesType | None = None,
-        group_address_switch_green_state: GroupAddressesType | None = None,
-        group_address_brightness_green: GroupAddressesType | None = None,
-        group_address_brightness_green_state: GroupAddressesType | None = None,
-        group_address_switch_blue: GroupAddressesType | None = None,
-        group_address_switch_blue_state: GroupAddressesType | None = None,
-        group_address_brightness_blue: GroupAddressesType | None = None,
-        group_address_brightness_blue_state: GroupAddressesType | None = None,
-        group_address_switch_white: GroupAddressesType | None = None,
-        group_address_switch_white_state: GroupAddressesType | None = None,
-        group_address_brightness_white: GroupAddressesType | None = None,
-        group_address_brightness_white_state: GroupAddressesType | None = None,
+        group_address_switch: GroupAddressesType = None,
+        group_address_switch_state: GroupAddressesType = None,
+        group_address_brightness: GroupAddressesType = None,
+        group_address_brightness_state: GroupAddressesType = None,
+        group_address_color: GroupAddressesType = None,
+        group_address_color_state: GroupAddressesType = None,
+        group_address_rgbw: GroupAddressesType = None,
+        group_address_rgbw_state: GroupAddressesType = None,
+        group_address_hue: GroupAddressesType = None,
+        group_address_hue_state: GroupAddressesType = None,
+        group_address_saturation: GroupAddressesType = None,
+        group_address_saturation_state: GroupAddressesType = None,
+        group_address_xyy_color: GroupAddressesType = None,
+        group_address_xyy_color_state: GroupAddressesType = None,
+        group_address_tunable_white: GroupAddressesType = None,
+        group_address_tunable_white_state: GroupAddressesType = None,
+        group_address_color_temperature: GroupAddressesType = None,
+        group_address_color_temperature_state: GroupAddressesType = None,
+        group_address_switch_red: GroupAddressesType = None,
+        group_address_switch_red_state: GroupAddressesType = None,
+        group_address_brightness_red: GroupAddressesType = None,
+        group_address_brightness_red_state: GroupAddressesType = None,
+        group_address_switch_green: GroupAddressesType = None,
+        group_address_switch_green_state: GroupAddressesType = None,
+        group_address_brightness_green: GroupAddressesType = None,
+        group_address_brightness_green_state: GroupAddressesType = None,
+        group_address_switch_blue: GroupAddressesType = None,
+        group_address_switch_blue_state: GroupAddressesType = None,
+        group_address_brightness_blue: GroupAddressesType = None,
+        group_address_brightness_blue_state: GroupAddressesType = None,
+        group_address_switch_white: GroupAddressesType = None,
+        group_address_switch_white_state: GroupAddressesType = None,
+        group_address_brightness_white: GroupAddressesType = None,
+        group_address_brightness_white_state: GroupAddressesType = None,
+        color_temperature_type: ColorTemperatureType = ColorTemperatureType.UINT_2_BYTE,
         sync_state: bool | int | float | str = True,
         min_kelvin: int | None = None,
         max_kelvin: int | None = None,
         device_updated_cb: DeviceCallbackType[Light] | None = None,
-    ):
+    ) -> None:
         """Initialize Light class."""
         super().__init__(xknx, name, device_updated_cb)
 
@@ -195,6 +195,7 @@ class Light(Device):
             group_address_color_state,
             sync_state=sync_state,
             device_name=self.name,
+            feature_name="Color RGB",
             after_update_cb=self.after_update,
         )
 
@@ -204,6 +205,7 @@ class Light(Device):
             group_address_rgbw_state,
             sync_state=sync_state,
             device_name=self.name,
+            feature_name="Color RGBW",
             after_update_cb=self.after_update,
         )
 
@@ -236,6 +238,7 @@ class Light(Device):
             group_address_xyy_color_state,
             sync_state=sync_state,
             device_name=self.name,
+            feature_name="Color XYY",
             after_update_cb=self._xyy_color_from_rv,
         )
 
@@ -251,11 +254,12 @@ class Light(Device):
             range_to=255,
         )
 
-        self.color_temperature = RemoteValueDpt2ByteUnsigned(
+        self.color_temperature = RemoteValueNumeric(
             xknx,
             group_address_color_temperature,
             group_address_color_temperature_state,
             sync_state=sync_state,
+            value_type=color_temperature_type.value,
             device_name=self.name,
             feature_name="Color temperature",
             after_update_cb=self.after_update,
@@ -311,20 +315,23 @@ class Light(Device):
 
         self.min_kelvin = min_kelvin
         self.max_kelvin = max_kelvin
-        self._individual_color_debounce_task_name = (
-            f"{id(self)}_individual_color_debounce"
+        self._individual_color_debounce_task = Task(
+            name=f"{id(self)}_individual_color_debounce",
+            target=self._debouncer_finished,
+            wait_before_start=self.DEBOUNCE_TIMEOUT,
         )
-        self._individual_color_debounce_telegram_counter: int
-        self._reset_individual_color_debounce_telegrams()
+        self._individual_color_debounce_telegram_counter = (
+            self._initial_individual_color_debounce_telegrams()
+        )
 
-    def _iter_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices RemoteValue classes."""
         return chain(
             self._iter_instant_remote_values(),
             self._iter_debounce_remote_values(),
         )
 
-    def _iter_instant_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_instant_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices RemoteValue classes calling after_update_cb immediately."""
         yield self.switch
         yield self.brightness
@@ -336,7 +343,7 @@ class Light(Device):
         yield self.tunable_white
         yield self.color_temperature
 
-    def _iter_debounce_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_debounce_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices RemoteValue classes debouncing after_update_cb."""
         for color in self._iter_individual_colors():
             yield color.switch
@@ -346,9 +353,13 @@ class Light(Device):
         """Iterate the devices individual colors."""
         yield from (self.red, self.green, self.blue, self.white)
 
-    def _reset_individual_color_debounce_telegrams(self) -> None:
+    def async_remove_tasks(self) -> None:
+        """Remove async tasks of device."""
+        self.xknx.task_registry.remove_task(self._individual_color_debounce_task)
+
+    def _initial_individual_color_debounce_telegrams(self) -> int:
         """Reset individual color debounce telegram counter."""
-        self._individual_color_debounce_telegram_counter = sum(
+        return sum(
             (
                 self.red.switch.initialized or self.red.brightness.initialized,
                 self.green.switch.initialized or self.green.brightness.initialized,
@@ -357,25 +368,22 @@ class Light(Device):
             )
         )
 
-    async def _individual_color_callback_debounce(self) -> None:
+    def _debouncer_finished(self) -> None:
+        """Reset debouncer after all telegrams were processed."""
+        self._individual_color_debounce_telegram_counter = (
+            self._initial_individual_color_debounce_telegrams()
+        )
+        self.after_update()
+
+    def _individual_color_callback_debounce(self, *args: Any) -> None:
         """Run callback after all individual colors were updated or timeout passed."""
-
-        async def debouncer() -> None:
-            await asyncio.sleep(Light.DEBOUNCE_TIMEOUT)
-            self._reset_individual_color_debounce_telegrams()
-            await asyncio.shield(self.after_update())
-
         self._individual_color_debounce_telegram_counter -= 1
         if self._individual_color_debounce_telegram_counter > 0:
             # task registry cancels existing task
-            self.xknx.task_registry.register(
-                name=self._individual_color_debounce_task_name,
-                async_func=debouncer,
-            ).start()
+            self.xknx.task_registry.start_task(self._individual_color_debounce_task)
             return
-        self.xknx.task_registry.unregister(self._individual_color_debounce_task_name)
-        self._reset_individual_color_debounce_telegrams()
-        await self.after_update()
+        self._individual_color_debounce_task.cancel()
+        self._debouncer_finished()
 
     @property
     def supports_brightness(self) -> bool:
@@ -428,18 +436,18 @@ class Light(Device):
     async def set_on(self) -> None:
         """Switch light on."""
         if self.switch.writable:
-            await self.switch.on()
+            self.switch.on()
             return
         for color in self._iter_individual_colors():
-            await color.set_on()
+            color.set_on()
 
     async def set_off(self) -> None:
         """Switch light off."""
         if self.switch.writable:
-            await self.switch.off()
+            self.switch.off()
             return
         for color in self._iter_individual_colors():
-            await color.set_off()
+            color.set_off()
 
     @property
     def current_brightness(self) -> int | None:
@@ -451,7 +459,7 @@ class Light(Device):
         if not self.supports_brightness:
             logger.warning("Dimming not supported for device %s", self.get_name())
             return
-        await self.brightness.set(brightness)
+        self.brightness.set(brightness)
 
     @property
     def current_color(self) -> tuple[tuple[int, int, int] | None, int | None]:
@@ -463,9 +471,24 @@ class Light(Device):
         if self.supports_rgbw and self.rgbw.initialized:
             if not self.rgbw.value:
                 return None, None
-            return self.rgbw.value[:3], self.rgbw.value[3]
+            if (
+                self.rgbw.value.red is not None
+                and self.rgbw.value.green is not None
+                and self.rgbw.value.blue is not None
+            ):
+                return (
+                    (self.rgbw.value.red, self.rgbw.value.green, self.rgbw.value.blue),
+                    self.rgbw.value.white,
+                )
+            return None, self.rgbw.value.white
         if self.color.initialized:
-            return self.color.value, None
+            if self.color.value is None:
+                return None, None
+            return (
+                self.color.value.red,
+                self.color.value.green,
+                self.color.value.blue,
+            ), None
         # individual RGB addresses - white will return None when it is not initialized
         colors = (
             self.red.brightness.value,
@@ -488,34 +511,35 @@ class Light(Device):
         if white is not None:
             if self.supports_rgbw:
                 if self.rgbw.initialized:
-                    await self.rgbw.set((*color, white))
+                    self.rgbw.set(RGBWColor(*color, white))
                     return
                 if all(
                     c.brightness.initialized for c in self._iter_individual_colors()
                 ):
-                    await self.red.brightness.set(color[0])
-                    await self.green.brightness.set(color[1])
-                    await self.blue.brightness.set(color[2])
-                    await self.white.brightness.set(white)
+                    self.red.brightness.set(color[0])
+                    self.green.brightness.set(color[1])
+                    self.blue.brightness.set(color[2])
+                    self.white.brightness.set(white)
                     return
             logger.warning("RGBW not supported for device %s", self.get_name())
         else:
             if self.supports_color:
                 if self.color.initialized:
-                    await self.color.set(color)
+                    self.color.set(RGBColor(*color))
                     return
                 if all(
                     c.brightness.initialized for c in (self.red, self.green, self.blue)
                 ):
-                    await self.red.brightness.set(color[0])
-                    await self.green.brightness.set(color[1])
-                    await self.blue.brightness.set(color[2])
+                    self.red.brightness.set(color[0])
+                    self.green.brightness.set(color[1])
+                    self.blue.brightness.set(color[2])
                     return
             logger.warning("Colors not supported for device %s", self.get_name())
 
     @property
     def current_hs_color(self) -> tuple[float, float] | None:
-        """Return current HS-color of the light.
+        """
+        Return current HS-color of the light.
 
         Hue is scaled 0-360 (265 possible values from KNX)
         Sat is scaled 0-100
@@ -533,29 +557,23 @@ class Light(Device):
             return
         value_sent = False
         if (hue := hs_color[0]) != self.hue.value:
-            await self.hue.set(hue)
+            self.hue.set(hue)
             value_sent = True
         if (saturation := hs_color[1]) != self.saturation.value:
-            await self.saturation.set(saturation)
+            self.saturation.set(saturation)
             value_sent = True
         if not value_sent:
             # at least one value shall be sent to enable turn-on by hs_color
-            await self.hue.set(hue)
-            await self.saturation.set(saturation)
+            self.hue.set(hue)
+            self.saturation.set(saturation)
 
-    async def _xyy_color_from_rv(self) -> None:
+    def _xyy_color_from_rv(self, xyy_color: XYYColor) -> None:
         """Update the current xyY-color from RemoteValue (Callback)."""
-        new_xyy = self.xyy_color.value
-        if new_xyy is None or self._xyy_color_valid is None:
-            self._xyy_color_valid = new_xyy
+        if self._xyy_color_valid is not None:
+            self._xyy_color_valid = self._xyy_color_valid | xyy_color
         else:
-            new_color, new_brightness = new_xyy
-            if new_color is None:
-                new_color = self._xyy_color_valid.color
-            if new_brightness is None:
-                new_brightness = self._xyy_color_valid.brightness
-            self._xyy_color_valid = XYYColor(color=new_color, brightness=new_brightness)
-        await self.after_update()
+            self._xyy_color_valid = xyy_color
+        self.after_update()
 
     @property
     def current_xyy_color(self) -> XYYColor | None:
@@ -567,7 +585,7 @@ class Light(Device):
         if not self.supports_xyy_color:
             logger.warning("XYY-color not supported for device %s", self.get_name())
             return
-        await self.xyy_color.set(xyy)
+        self.xyy_color.set(xyy)
 
     @property
     def current_tunable_white(self) -> int | None:
@@ -579,10 +597,10 @@ class Light(Device):
         if not self.supports_tunable_white:
             logger.warning("Tunable white not supported for device %s", self.get_name())
             return
-        await self.tunable_white.set(tunable_white)
+        self.tunable_white.set(tunable_white)
 
     @property
-    def current_color_temperature(self) -> int | None:
+    def current_color_temperature(self) -> int | float | None:
         """Return current absolute color temperature of light."""
         return self.color_temperature.value
 
@@ -594,14 +612,14 @@ class Light(Device):
                 self.get_name(),
             )
             return
-        await self.color_temperature.set(color_temperature)
+        self.color_temperature.set(color_temperature)
 
-    async def process_group_write(self, telegram: "Telegram") -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
         for remote_value in self._iter_instant_remote_values():
-            await remote_value.process(telegram)
+            remote_value.process(telegram)
         for remote_value in self._iter_debounce_remote_values():
-            await remote_value.process(telegram, always_callback=True)
+            remote_value.process(telegram, always_callback=True)
 
     def __str__(self) -> str:
         """Return object as readable string."""

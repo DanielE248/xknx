@@ -1,4 +1,5 @@
 """Unit test for KNX/IP Disconnect Request/Response."""
+
 from unittest.mock import patch
 
 from xknx.io.request_response import Disconnect
@@ -15,7 +16,7 @@ from xknx.knxip import (
 class TestDisconnect:
     """Test class for xknx/io/Disconnect objects."""
 
-    async def test_disconnect(self):
+    async def test_disconnect(self) -> None:
         """Test disconnecting from KNX bus."""
         communication_channel_id = 23
         udp_transport = UDPTransport(("192.168.1.1", 0), ("192.168.1.2", 1234))
@@ -35,9 +36,10 @@ class TestDisconnect:
                 control_endpoint=local_hpai,
             )
         )
-        with patch("xknx.io.transport.UDPTransport.send") as mock_udp_send, patch(
-            "xknx.io.transport.UDPTransport.getsockname"
-        ) as mock_udp_getsockname:
+        with (
+            patch("xknx.io.transport.UDPTransport.send") as mock_udp_send,
+            patch("xknx.io.transport.UDPTransport.getsockname") as mock_udp_getsockname,
+        ):
             mock_udp_getsockname.return_value = ("192.168.1.3", 4321)
             await disconnect.start()
             mock_udp_send.assert_called_with(exp_knxipframe)
@@ -66,7 +68,7 @@ class TestDisconnect:
         disconnect.response_rec_callback(res_knxipframe, HPAI(), None)
         assert disconnect.success
 
-    async def test_disconnect_route_back_true(self):
+    async def test_disconnect_route_back_true(self) -> None:
         """Test disconnecting from KNX bus."""
         communication_channel_id = 23
         udp_transport = UDPTransport(("192.168.1.1", 0), ("192.168.1.2", 1234))
@@ -85,9 +87,10 @@ class TestDisconnect:
                 communication_channel_id=communication_channel_id,
             )
         )
-        with patch("xknx.io.transport.UDPTransport.send") as mock_udp_send, patch(
-            "xknx.io.transport.UDPTransport.getsockname"
-        ) as mock_udp_getsockname:
+        with (
+            patch("xknx.io.transport.UDPTransport.send") as mock_udp_send,
+            patch("xknx.io.transport.UDPTransport.getsockname") as mock_udp_getsockname,
+        ):
             mock_udp_getsockname.return_value = ("192.168.1.3", 4321)
             await disconnect.start()
             mock_udp_send.assert_called_with(exp_knxipframe)

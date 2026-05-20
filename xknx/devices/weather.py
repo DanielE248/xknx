@@ -12,16 +12,19 @@ It provides functionality for
 * reading current humidity (DPT 9.007)
 
 """
+
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
+from xknx.dpt import DPTPressure, DPTPressure2Byte
 from xknx.remote_value import (
     GroupAddressesType,
     RemoteValue,
+    RemoteValueByLength,
     RemoteValueNumeric,
     RemoteValueSwitch,
 )
@@ -85,21 +88,22 @@ class Weather(Device):
         self,
         xknx: XKNX,
         name: str,
-        group_address_temperature: GroupAddressesType | None = None,
-        group_address_brightness_south: GroupAddressesType | None = None,
-        group_address_brightness_north: GroupAddressesType | None = None,
-        group_address_brightness_west: GroupAddressesType | None = None,
-        group_address_brightness_east: GroupAddressesType | None = None,
-        group_address_wind_speed: GroupAddressesType | None = None,
-        group_address_wind_bearing: GroupAddressesType | None = None,
-        group_address_rain_alarm: GroupAddressesType | None = None,
-        group_address_frost_alarm: GroupAddressesType | None = None,
-        group_address_wind_alarm: GroupAddressesType | None = None,
-        group_address_day_night: GroupAddressesType | None = None,
-        group_address_air_pressure: GroupAddressesType | None = None,
-        group_address_humidity: GroupAddressesType | None = None,
+        group_address_temperature: GroupAddressesType = None,
+        group_address_brightness_south: GroupAddressesType = None,
+        group_address_brightness_north: GroupAddressesType = None,
+        group_address_brightness_west: GroupAddressesType = None,
+        group_address_brightness_east: GroupAddressesType = None,
+        group_address_wind_speed: GroupAddressesType = None,
+        group_address_wind_bearing: GroupAddressesType = None,
+        group_address_rain_alarm: GroupAddressesType = None,
+        group_address_frost_alarm: GroupAddressesType = None,
+        group_address_wind_alarm: GroupAddressesType = None,
+        group_address_day_night: GroupAddressesType = None,
+        group_address_air_pressure: GroupAddressesType = None,
+        group_address_humidity: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_updated_cb: DeviceCallbackType[Weather] | None = None,
+        invert_day_night: bool = False,
     ) -> None:
         """Initialize Weather class."""
         super().__init__(xknx, name, device_updated_cb)
@@ -208,13 +212,14 @@ class Weather(Device):
             device_name=self.name,
             feature_name="Day/Night",
             after_update_cb=self.after_update,
+            invert=invert_day_night,
         )
 
-        self._air_pressure = RemoteValueNumeric(
+        self._air_pressure = RemoteValueByLength(
             xknx,
+            dpt_classes=(DPTPressure, DPTPressure2Byte),
             group_address_state=group_address_air_pressure,
             sync_state=sync_state,
-            value_type="pressure_2byte",
             device_name=self.name,
             feature_name="Air pressure",
             after_update_cb=self.after_update,
@@ -230,7 +235,7 @@ class Weather(Device):
             after_update_cb=self.after_update,
         )
 
-    def _iter_remote_values(self) -> Iterator[RemoteValue[Any, Any]]:
+    def _iter_remote_values(self) -> Iterator[RemoteValue[Any]]:
         """Iterate the devices remote values."""
         yield self._temperature
         yield self._brightness_south
@@ -246,10 +251,10 @@ class Weather(Device):
         yield self._air_pressure
         yield self._humidity
 
-    async def process_group_write(self, telegram: Telegram) -> None:
+    def process_group_write(self, telegram: Telegram) -> None:
         """Process incoming and outgoing GROUP WRITE telegram."""
         for remote_value in self._iter_remote_values():
-            await remote_value.process(telegram)
+            remote_value.process(telegram)
 
     @property
     def temperature(self) -> float | None:
@@ -311,7 +316,7 @@ class Weather(Device):
 
     @property
     def day_night(self) -> bool | None:
-        """Return day or night."""
+        """Return day or night. `True` for day and `False` for night."""
         return self._day_night.value
 
     @property

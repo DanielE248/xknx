@@ -4,13 +4,14 @@ UDPTransport is an abstraction for handling the complete UDP io.
 The module is build upon asyncio udp functions.
 Due to lame support of UDP multicast within asyncio some special treatment for multicast is necessary.
 """
+
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import logging
 import socket
-from sys import platform
-from typing import Callable, cast
+import sys
 
 from xknx.exceptions import CommunicationError, CouldNotParseKNXIP
 from xknx.knxip import HPAI, KNXIPFrame
@@ -28,11 +29,11 @@ class UDPTransport(KNXIPTransport):
     class UDPTransportFactory(asyncio.DatagramProtocol):
         """Abstraction for managing the asyncio-udp transports."""
 
+        __slots__ = ("data_received_callback", "transport")
+
         def __init__(
-            self,
-            data_received_callback: Callable[[bytes, tuple[str, int]], None]
-            | None = None,
-        ):
+            self, data_received_callback: Callable[[bytes, tuple[str, int]], None]
+        ) -> None:
             """Initialize UDPTransportFactory class."""
             self.transport: asyncio.BaseTransport | None = None
             self.data_received_callback = data_received_callback
@@ -44,8 +45,7 @@ class UDPTransport(KNXIPTransport):
         def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
             """Call assigned callback. Callback for datagram received."""
             raw_socket_logger.debug("Received from %s: %s", addr, data.hex())
-            if self.data_received_callback is not None:
-                self.data_received_callback(data, addr)
+            self.data_received_callback(data, addr)
 
         def error_received(self, exc: Exception) -> None:
             """Call when a send or receive operation raises an OSError."""
@@ -55,12 +55,19 @@ class UDPTransport(KNXIPTransport):
             """Log error. Callback for connection lost."""
             logger.debug("Closing UDP transport.")
 
+    __slots__ = (
+        "local_addr",
+        "local_addr_assigned",
+        "multicast",
+        "multicast_listener",
+    )
+
     def __init__(
         self,
         local_addr: tuple[str, int],
         remote_addr: tuple[str, int],
         multicast: bool = False,
-    ):
+    ) -> None:
         """Initialize UDPTransport class."""
         if not isinstance(local_addr, tuple):
             raise TypeError()
@@ -71,10 +78,16 @@ class UDPTransport(KNXIPTransport):
         self.multicast = multicast
 
         self.callbacks = []
+        self.local_addr_assigned: tuple[str, int] | None = None
         self.transport: asyncio.DatagramTransport | None = None
+        self.multicast_listener: asyncio.DatagramTransport | None = None
 
     def data_received_callback(self, raw: bytes, source: tuple[str, int]) -> None:
         """Parse and process KNXIP frame. Callback for having received an UDP packet."""
+        if self.multicast and source == self.local_addr_assigned:
+            raw_socket_logger.debug("Discarded echoed datagram")
+            return
+
         if raw:
             try:
                 knxipframe, _ = KNXIPFrame.from_knx(raw)
@@ -114,10 +127,10 @@ class UDPTransport(KNXIPTransport):
         )
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
 
-        if platform == "win32":
+        if sys.platform == "win32":
             # '' represents INADDR_ANY
             sock.bind(("", remote_addr[1]))
-        elif platform == "darwin":
+        elif sys.platform == "darwin":
             # allows multiple sockets to the same port by multiple processes
             # behaves like SO_REUSEADDR for bind for INADDR_ANY
             # (GatewayScanner opens multiple sockets)
@@ -126,32 +139,28 @@ class UDPTransport(KNXIPTransport):
         else:
             sock.bind((remote_addr[0], remote_addr[1]))
 
-        # ignore multicast datagrams sent by the host itself
-        # don't use when running multiple routing instances on a single host (interface)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-
         return sock
 
     async def connect(self) -> None:
-        """Connect UDP socket. Open UDP port and build mulitcast socket if necessary."""
+        """Connect UDP socket. Open UDP port and build multicast socket if necessary."""
+        loop = asyncio.get_running_loop()
         udp_transport_factory = UDPTransport.UDPTransportFactory(
             data_received_callback=self.data_received_callback,
         )
-        loop = asyncio.get_running_loop()
         if self.multicast:
             sock = UDPTransport.create_multicast_sock(
                 self.local_addr[0], self.remote_addr
             )
-            (transport, _) = await loop.create_datagram_endpoint(
+            (self.multicast_listener, _) = await loop.create_datagram_endpoint(
                 lambda: udp_transport_factory,
                 sock=sock,
             )
-        else:
-            (transport, _) = await loop.create_datagram_endpoint(
-                lambda: udp_transport_factory,
-                local_addr=self.local_addr,
-            )
-        self.transport = cast(asyncio.DatagramTransport, transport)
+
+        (self.transport, _) = await loop.create_datagram_endpoint(
+            lambda: udp_transport_factory,
+            local_addr=self.local_addr,
+        )
+        self.local_addr_assigned = self.getsockname()
 
     def send(self, knxipframe: KNXIPFrame, addr: tuple[str, int] | None = None) -> None:
         """Send KNXIPFrame to socket."""
@@ -169,3 +178,11 @@ class UDPTransport(KNXIPTransport):
             self.transport.sendto(knxipframe.to_knx(), self.remote_addr)
         else:
             self.transport.sendto(knxipframe.to_knx(), addr=_addr)
+
+    def stop(self) -> None:
+        """Stop socket."""
+        if self.multicast_listener is not None:
+            self.multicast_listener.close()
+            self.multicast_listener = None
+
+        return super().stop()

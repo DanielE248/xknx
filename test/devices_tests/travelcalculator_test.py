@@ -1,4 +1,5 @@
 """Unit test for TravelCalculator objects."""
+
 from unittest.mock import patch
 
 from xknx.devices import TravelCalculator, TravelStatus
@@ -14,7 +15,7 @@ class TestTravelCalculator:
     #
     # INIT
     #
-    def test_init(self):
+    def test_init(self) -> None:
         """Test initial status."""
         travelcalculator = TravelCalculator(25, 50)
         assert not travelcalculator.is_closed()
@@ -24,14 +25,14 @@ class TestTravelCalculator:
         assert travelcalculator.position_reached()
         assert travelcalculator.current_position() is None
 
-    def test_set_position(self):
+    def test_set_position(self) -> None:
         """Test set position."""
         travelcalculator = TravelCalculator(25, 50)
         travelcalculator.set_position(70)
         assert travelcalculator.position_reached()
         assert travelcalculator.current_position() == 70
 
-    def test_set_position_after_travel(self):
+    def test_set_position_after_travel(self) -> None:
         """Set explicit position after start_travel should stop traveling."""
         travelcalculator = TravelCalculator(25, 50)
         travelcalculator.start_travel(30)
@@ -39,7 +40,7 @@ class TestTravelCalculator:
         assert travelcalculator.position_reached()
         assert travelcalculator.current_position() == 80
 
-    def test_travel_down(self):
+    def test_travel_down(self) -> None:
         """Test travel down."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -73,7 +74,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 60
             assert travelcalculator.position_reached()
 
-    def test_travel_up(self):
+    def test_travel_up(self) -> None:
         """Test travel up."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -107,7 +108,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 50
             assert travelcalculator.position_reached()
 
-    def test_stop(self):
+    def test_stop(self) -> None:
         """Test stopping."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -137,7 +138,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 68
             assert travelcalculator.position_reached()
 
-    def test_travel_down_with_updates(self):
+    def test_travel_down_with_updates(self) -> None:
         """Test travel down with position updates from bus."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -173,7 +174,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 100
             assert travelcalculator.position_reached()
 
-    def test_travel_up_with_updates(self):
+    def test_travel_up_with_updates(self) -> None:
         """Test travel up with position updates from bus."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -193,7 +194,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 50
             assert travelcalculator.position_reached()
 
-    def test_change_direction(self):
+    def test_change_direction(self) -> None:
         """Test changing direction while travelling."""
         travelcalculator = TravelCalculator(50, 25)
         with patch("time.time") as mock_time:
@@ -219,7 +220,7 @@ class TestTravelCalculator:
             assert travelcalculator.current_position() == 48
             assert travelcalculator.position_reached()
 
-    def test_travel_full_up(self):
+    def test_travel_full_up(self) -> None:
         """Test travelling to the full up position."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -237,7 +238,7 @@ class TestTravelCalculator:
             assert travelcalculator.is_open()
             assert not travelcalculator.is_closed()
 
-    def test_travel_full_down(self):
+    def test_travel_full_down(self) -> None:
         """Test travelling to the full down position."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -255,7 +256,7 @@ class TestTravelCalculator:
             assert travelcalculator.is_closed()
             assert not travelcalculator.is_open()
 
-    def test_is_traveling(self):
+    def test_is_traveling(self) -> None:
         """Test if cover is traveling and position reached."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:
@@ -278,7 +279,7 @@ class TestTravelCalculator:
             assert not travelcalculator.is_traveling()
             assert travelcalculator.position_reached()
 
-    def test_is_opening_closing(self):
+    def test_is_opening_closing(self) -> None:
         """Test reports is_opening and is_closing."""
         travelcalculator = TravelCalculator(25, 50)
         with patch("time.time") as mock_time:

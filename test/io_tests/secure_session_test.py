@@ -1,4 +1,5 @@
 """Test Secure Session."""
+
 import asyncio
 from unittest.mock import Mock, patch
 
@@ -12,11 +13,14 @@ from xknx.knxip import (
     HPAI,
     KNXIPFrame,
     SecureWrapper,
+    SessionAuthenticate,
     SessionRequest,
     SessionResponse,
     SessionStatus,
 )
 from xknx.knxip.knxip_enum import SecureSessionStatusCode
+
+from ..conftest import EventLoopClockAdvancer, skip_3_10
 
 
 class TestSecureSession:
@@ -44,7 +48,7 @@ class TestSecureSession:
     mock_serial_number = bytes.fromhex("00 fa 12 34 56 78")
     mock_message_tag = bytes.fromhex("af fe")
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         """Set up test class."""
         # pylint: disable=attribute-defined-outside-init
         self.patch_serial_number = patch(
@@ -63,25 +67,31 @@ class TestSecureSession:
             device_authentication_password=self.mock_device_authentication_password,
         )
 
-    def teardown_method(self):
-        """Cancel keepalive task."""
-        self.session.stop()
+    def teardown_method(self) -> None:
+        """Tear down test class."""
         self.patch_serial_number.stop()
         self.patch_message_tag.stop()
 
+    @skip_3_10
     @patch("xknx.io.transport.tcp_transport.TCPTransport.connect")
     @patch("xknx.io.transport.tcp_transport.TCPTransport.send")
     @patch(
         "xknx.io.ip_secure.generate_ecdh_key_pair",
         return_value=(mock_private_key, mock_public_key),
     )
+    @patch(
+        "xknx.io.ip_secure.SecureSession.send",
+        wraps=SecureSession.send,
+        autospec=True,
+    )
     async def test_lifecycle(
         self,
-        _mock_generate,
-        mock_super_send,
-        mock_super_connect,
-        time_travel,
-    ):
+        mock_session_send: Mock,
+        _mock_generate: Mock,
+        mock_super_send: Mock,
+        mock_super_connect: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test connection, handshake, keepalive and shutdown."""
         connect_task = asyncio.create_task(self.session.connect())
         await time_travel(0)
@@ -90,8 +100,14 @@ class TestSecureSession:
         session_request_frame = KNXIPFrame.init_from_body(
             SessionRequest(ecdh_client_public_key=self.mock_public_key)
         )
-        mock_super_send.assert_called_once_with(
-            session_request_frame, None  # None for addr in TCP transport
+        mock_session_send.assert_called_once_with(  # unencrypted
+            self.session,  # account for self argument in wraps
+            session_request_frame,
+        )
+        mock_session_send.reset_mock()
+        mock_super_send.assert_called_once_with(  # unencrypted
+            session_request_frame,
+            None,  # None for addr in TCP transport
         )
         mock_super_send.reset_mock()
         # incoming
@@ -107,6 +123,19 @@ class TestSecureSession:
         self.session.handle_knxipframe(session_response_frame, HPAI(*self.mock_addr))
         await time_travel(0)
         # outgoing
+        authenticate_frame = KNXIPFrame.init_from_body(
+            SessionAuthenticate(
+                user_id=self.mock_user_id,
+                message_authentication_code=bytes.fromhex(
+                    "1f 1d 59 ea 9f 12 a1 52 e5 d9 72 7f 08 46 2c de"
+                ),
+            )
+        )
+        mock_session_send.assert_called_once_with(
+            self.session,  # account for self argument in wraps
+            authenticate_frame,
+        )
+        mock_session_send.reset_mock()
         encrypted_authenticate_frame = KNXIPFrame.init_from_body(
             SecureWrapper(
                 secure_session_id=self.mock_session_id,
@@ -124,7 +153,8 @@ class TestSecureSession:
             )
         )
         mock_super_send.assert_called_once_with(
-            encrypted_authenticate_frame, None  # None for addr in TCP transport
+            encrypted_authenticate_frame,
+            None,  # None for addr in TCP transport
         )
         mock_super_send.reset_mock()
         # incoming
@@ -160,20 +190,25 @@ class TestSecureSession:
 
         # keepalive SessionStatus (not specific for sake of simplicity)
         await time_travel(SESSION_KEEPALIVE_RATE)
-        mock_super_send.assert_called_once()
+        mock_session_send.assert_called_once()  # unencrypted
+        mock_session_send.reset_mock()
+        mock_super_send.assert_called_once()  # encrypted
         mock_super_send.reset_mock()
 
         # SessionStatus CLOSE sent on graceful disconnect
-        with patch.object(
-            self.session, "send", wraps=self.session.send
-        ) as mock_send, patch.object(self.session, "transport") as mock_transport:
+        with (
+            patch.object(self.session, "transport") as mock_transport,
+        ):
             self.session.stop()
-            mock_send.assert_called_once_with(session_status_close_frame)
+            mock_session_send.assert_called_once_with(
+                self.session,  # account for self argument in wraps
+                session_status_close_frame,
+            )
             mock_super_send.assert_called_once()
             mock_transport.close.assert_called_once()
             assert self.session._keepalive_task is None
 
-    def test_uninitialized(self):
+    def test_uninitialized(self) -> None:
         """Test for raising when an encrypted Frame arrives at an uninitialized Session."""
         secure_wrapper_frame = KNXIPFrame.init_from_body(
             SecureWrapper(
@@ -198,11 +233,11 @@ class TestSecureSession:
     )
     async def test_invalid_frames(
         self,
-        _mock_generate,
-        mock_super_send,
-        mock_super_connect,
-        time_travel,
-    ):
+        _mock_generate: Mock,
+        mock_super_send: Mock,
+        mock_super_connect: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test handling invalid frames."""
         callback_mock = Mock()
         self.session.register_callback(callback_mock)
@@ -267,6 +302,9 @@ class TestSecureSession:
         )
         await time_travel(0)
         callback_mock.assert_not_called()
+        # async teardown
+        self.session.stop()
+        assert self.session.initialized is False
 
     @patch("xknx.io.transport.tcp_transport.TCPTransport.connect")
     @patch("xknx.io.transport.tcp_transport.TCPTransport.send")
@@ -276,11 +314,11 @@ class TestSecureSession:
     )
     async def test_invalid_session_response(
         self,
-        _mock_generate,
-        mock_super_send,
-        mock_super_connect,
-        time_travel,
-    ):
+        _mock_generate: Mock,
+        mock_super_send: Mock,
+        mock_super_connect: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test handling invalid session response."""
         connect_task = asyncio.create_task(self.session.connect())
         await time_travel(0)
@@ -309,11 +347,11 @@ class TestSecureSession:
     )
     async def test_no_authentication(
         self,
-        _mock_generate,
-        mock_super_send,
-        mock_super_connect,
-        time_travel,
-    ):
+        _mock_generate: Mock,
+        mock_super_send: Mock,
+        mock_super_connect: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test handling initializing session without verifying server authenticity."""
         self.session._device_authentication_code = None
         connect_task = asyncio.create_task(self.session.connect())
@@ -350,7 +388,8 @@ class TestSecureSession:
             )
         )
         mock_super_send.assert_called_once_with(
-            encrypted_authenticate_frame, None  # None for addr in TCP transport
+            encrypted_authenticate_frame,
+            None,  # None for addr in TCP transport
         )
         # incoming
         encrypted_session_status_frame = KNXIPFrame.init_from_body(
@@ -370,6 +409,9 @@ class TestSecureSession:
         )
         await connect_task
         assert self.session.initialized is True
+        # async teardown
+        self.session.stop()
+        assert self.session.initialized is False
 
     @patch("xknx.io.transport.tcp_transport.TCPTransport.connect")
     @patch("xknx.io.transport.tcp_transport.TCPTransport.send")
@@ -379,11 +421,11 @@ class TestSecureSession:
     )
     async def test_invalid_authentication(
         self,
-        _mock_generate,
-        mock_super_send,
-        mock_super_connect,
-        time_travel,
-    ):
+        _mock_generate: Mock,
+        mock_super_send: Mock,
+        mock_super_connect: Mock,
+        time_travel: EventLoopClockAdvancer,
+    ) -> None:
         """Test handling no session status while authenticating."""
         connect_task = asyncio.create_task(self.session.connect())
         await time_travel(0)

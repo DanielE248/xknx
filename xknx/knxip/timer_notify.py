@@ -4,6 +4,7 @@ Module for Serialization and Deserialization of KNX Timer Notify.
 This frame shall be sent during secure KNXnet/IP multicast group communication
 to keep the multicast group member's timer values synchronized.
 """
+
 from __future__ import annotations
 
 from typing import Final
@@ -26,7 +27,7 @@ class TimerNotify(KNXIPBody):
         serial_number: bytes = bytes(6),
         message_tag: bytes = bytes(2),
         message_authentication_code: bytes = bytes(16),
-    ):
+    ) -> None:
         """Initialize TimerNotify object."""
         self.timer_value = timer_value
         self.serial_number = serial_number

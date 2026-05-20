@@ -1,4 +1,5 @@
 """Unit test for KNX/IP Connect Request/Response."""
+
 from unittest.mock import patch
 
 from xknx.io.request_response import Connect
@@ -7,17 +8,18 @@ from xknx.knxip import (
     HPAI,
     ConnectionStateRequest,
     ConnectRequest,
-    ConnectRequestType,
     ConnectResponse,
+    ConnectResponseData,
     ErrorCode,
     KNXIPFrame,
 )
+from xknx.telegram import IndividualAddress
 
 
 class TestConnect:
     """Test class for xknx/io/Connect objects."""
 
-    async def test_connect(self):
+    async def test_connect(self) -> None:
         """Test connecting from KNX bus."""
         udp_transport = UDPTransport(("192.168.1.1", 0), ("192.168.1.2", 1234))
         local_hpai = HPAI(ip_addr="192.168.1.3", port=4321)
@@ -29,15 +31,15 @@ class TestConnect:
         # Expected KNX/IP-Frame:
         exp_knxipframe = KNXIPFrame.init_from_body(
             ConnectRequest(
-                request_type=ConnectRequestType.TUNNEL_CONNECTION,
                 control_endpoint=local_hpai,
                 data_endpoint=local_hpai,
             )
         )
 
-        with patch("xknx.io.transport.UDPTransport.send") as mock_udp_send, patch(
-            "xknx.io.transport.UDPTransport.getsockname"
-        ) as mock_udp_getsockname:
+        with (
+            patch("xknx.io.transport.UDPTransport.send") as mock_udp_send,
+            patch("xknx.io.transport.UDPTransport.getsockname") as mock_udp_getsockname,
+        ):
             mock_udp_getsockname.return_value = ("192.168.1.3", 4321)
             await connect.start()
             mock_udp_send.assert_called_with(exp_knxipframe)
@@ -65,15 +67,15 @@ class TestConnect:
         res_knxipframe = KNXIPFrame.init_from_body(
             ConnectResponse(
                 communication_channel=23,
-                identifier=7,
+                crd=ConnectResponseData(individual_address=IndividualAddress(7)),
             )
         )
         connect.response_rec_callback(res_knxipframe, HPAI(), None)
         assert connect.success
         assert connect.communication_channel == 23
-        assert connect.identifier == 7
+        assert connect.crd.individual_address.raw == 7
 
-    async def test_connect_route_back_true(self):
+    async def test_connect_route_back_true(self) -> None:
         """Test connecting from KNX bus."""
         udp_transport = UDPTransport(("192.168.1.1", 0), ("192.168.1.2", 1234))
         local_hpai = HPAI()  # route_back: No IP address, no port, UDP
@@ -83,12 +85,11 @@ class TestConnect:
         assert connect.awaited_response_class == ConnectResponse
 
         # Expected KNX/IP-Frame:
-        exp_knxipframe = KNXIPFrame.init_from_body(
-            ConnectRequest(request_type=ConnectRequestType.TUNNEL_CONNECTION)
-        )
-        with patch("xknx.io.transport.UDPTransport.send") as mock_udp_send, patch(
-            "xknx.io.transport.UDPTransport.getsockname"
-        ) as mock_udp_getsockname:
+        exp_knxipframe = KNXIPFrame.init_from_body(ConnectRequest())
+        with (
+            patch("xknx.io.transport.UDPTransport.send") as mock_udp_send,
+            patch("xknx.io.transport.UDPTransport.getsockname") as mock_udp_getsockname,
+        ):
             mock_udp_getsockname.return_value = ("192.168.1.3", 4321)
             await connect.start()
             mock_udp_send.assert_called_with(exp_knxipframe)
@@ -116,10 +117,10 @@ class TestConnect:
         res_knxipframe = KNXIPFrame.init_from_body(
             ConnectResponse(
                 communication_channel=23,
-                identifier=7,
+                crd=ConnectResponseData(individual_address=IndividualAddress(7)),
             )
         )
         connect.response_rec_callback(res_knxipframe, HPAI(), None)
         assert connect.success
         assert connect.communication_channel == 23
-        assert connect.identifier == 7
+        assert connect.crd.individual_address.raw == 7

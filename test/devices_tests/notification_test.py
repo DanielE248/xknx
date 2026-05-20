@@ -1,5 +1,6 @@
 """Unit test for Notification objects."""
-from unittest.mock import AsyncMock, patch
+
+from unittest.mock import Mock, patch
 
 from xknx import XKNX
 from xknx.devices import Notification
@@ -14,7 +15,7 @@ class TestNotification:
     #
     # SYNC
     #
-    async def test_sync_state(self):
+    async def test_sync_state(self) -> None:
         """Test sync function / sending group reads to KNX bus."""
         xknx = XKNX()
         notification = Notification(
@@ -30,75 +31,81 @@ class TestNotification:
     #
     # TEST PROCESS
     #
-    async def test_process(self):
+    async def test_process(self) -> None:
         """Test process telegram with notification. Test if device was updated."""
         xknx = XKNX()
         notification = Notification(xknx, "Warning", group_address="1/2/3")
         telegram_set = Telegram(
             destination_address=GroupAddress("1/2/3"),
-            payload=GroupValueWrite(DPTArray(DPTString().to_knx("Ein Prosit!"))),
+            payload=GroupValueWrite(DPTString().to_knx("Ein Prosit!")),
         )
-        await notification.process(telegram_set)
+        notification.process(telegram_set)
         assert notification.message == "Ein Prosit!"
 
         telegram_unset = Telegram(
             destination_address=GroupAddress("1/2/3"),
-            payload=GroupValueWrite(DPTArray(DPTString().to_knx(""))),
+            payload=GroupValueWrite(DPTString().to_knx("")),
         )
-        await notification.process(telegram_unset)
+        notification.process(telegram_unset)
         assert notification.message == ""
 
-    async def test_process_callback(self):
+    async def test_process_callback(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if callback was called."""
 
         xknx = XKNX()
         notification = Notification(xknx, "Warning", group_address="1/2/3")
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         notification.register_device_updated_cb(after_update_callback)
 
         telegram_set = Telegram(
             destination_address=GroupAddress("1/2/3"),
-            payload=GroupValueWrite(DPTArray(DPTString().to_knx("Ein Prosit!"))),
+            payload=GroupValueWrite(DPTString().to_knx("Ein Prosit!")),
         )
-        await notification.process(telegram_set)
+        notification.process(telegram_set)
         after_update_callback.assert_called_with(notification)
 
-    async def test_process_payload_invalid_length(self):
+    async def test_process_payload_invalid_length(self) -> None:
         """Test process wrong telegram (wrong payload length)."""
         xknx = XKNX()
-        cb_mock = AsyncMock()
+        after_update_callback = Mock()
         notification = Notification(
-            xknx, "Warning", group_address="1/2/3", device_updated_cb=cb_mock
+            xknx,
+            "Warning",
+            group_address="1/2/3",
+            device_updated_cb=after_update_callback,
         )
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((23, 24))),
         )
         with patch("logging.Logger.warning") as log_mock:
-            await notification.process(telegram)
+            notification.process(telegram)
             log_mock.assert_called_once()
-            cb_mock.assert_not_called()
+            after_update_callback.assert_not_called()
 
-    async def test_process_wrong_payload(self):
+    async def test_process_wrong_payload(self) -> None:
         """Test process wrong telegram (wrong payload type)."""
         xknx = XKNX()
-        cb_mock = AsyncMock()
+        after_update_callback = Mock()
         notification = Notification(
-            xknx, "Warning", group_address="1/2/3", device_updated_cb=cb_mock
+            xknx,
+            "Warning",
+            group_address="1/2/3",
+            device_updated_cb=after_update_callback,
         )
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
         with patch("logging.Logger.warning") as log_mock:
-            await notification.process(telegram)
+            notification.process(telegram)
             log_mock.assert_called_once()
-            cb_mock.assert_not_called()
+            after_update_callback.assert_not_called()
 
     #
     # TEST RESPOND
     #
-    async def test_respond_to_read(self):
+    async def test_respond_to_read(self) -> None:
         """Test respond_to_read function."""
         xknx = XKNX()
         responding = Notification(
@@ -123,11 +130,11 @@ class TestNotification:
             destination_address=GroupAddress("1/1/1"), payload=GroupValueRead()
         )
         # verify no response when respond_to_read is False
-        await non_responding.process(read_telegram)
+        non_responding.process(read_telegram)
         assert xknx.telegrams.qsize() == 0
 
         # verify response when respond_to_read is True
-        await responding.process(read_telegram)
+        responding.process(read_telegram)
         assert xknx.telegrams.qsize() == 1
         response = xknx.telegrams.get_nowait()
         assert response == Telegram(
@@ -157,7 +164,7 @@ class TestNotification:
     #
     # TEST SET MESSAGE
     #
-    async def test_set(self):
+    async def test_set(self) -> None:
         """Test notificationing off notification."""
         xknx = XKNX()
         notification = Notification(xknx, "Warning", group_address="1/2/3")
@@ -166,7 +173,7 @@ class TestNotification:
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
             destination_address=GroupAddress("1/2/3"),
-            payload=GroupValueWrite(DPTArray(DPTString().to_knx("Ein Prosit!"))),
+            payload=GroupValueWrite(DPTString().to_knx("Ein Prosit!")),
         )
         # test if message longer than 14 chars gets cropped
         await notification.set("This is too long.")
@@ -175,13 +182,13 @@ class TestNotification:
         telegram = xknx.telegrams.get_nowait()
         assert telegram == Telegram(
             destination_address=GroupAddress("1/2/3"),
-            payload=GroupValueWrite(DPTArray(DPTString().to_knx("This is too lo"))),
+            payload=GroupValueWrite(DPTString().to_knx("This is too lo")),
         )
 
     #
     # TEST has_group_address
     #
-    def test_has_group_address(self):
+    def test_has_group_address(self) -> None:
         """Test has_group_address."""
         xknx = XKNX()
         notification = Notification(

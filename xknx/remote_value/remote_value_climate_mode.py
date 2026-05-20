@@ -3,63 +3,77 @@ Module for managing an climate mode remote values.
 
 DPT .
 """
+
 from __future__ import annotations
 
 from abc import abstractmethod
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from xknx.dpt import (
     DPTArray,
     DPTBinary,
-    DPTControllerStatus,
     DPTHVACContrMode,
     DPTHVACMode,
+    DPTHVACStatus,
 )
-from xknx.dpt.dpt_hvac_mode import HVACControllerMode, HVACModeT, HVACOperationMode
+from xknx.dpt.dpt_1 import HeatCool
+from xknx.dpt.dpt_20 import HVACControllerMode, HVACOperationMode, HVACStatus
 from xknx.exceptions import ConversionError, CouldNotParseTelegram
 
 from .remote_value import (
-    AsyncCallbackType,
-    DPTPayloadT,
     GroupAddressesType,
     RemoteValue,
+    RVCallbackType,
 )
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 
-class RemoteValueClimateModeBase(RemoteValue[DPTPayloadT, Optional[HVACModeT]]):
+HVACModeT = TypeVar(
+    "HVACModeT",
+    HVACControllerMode,
+    HVACOperationMode,
+    HVACStatus,
+    HVACOperationMode | None,
+)
+
+
+class RemoteValueClimateModeBase(RemoteValue[HVACModeT]):
     """Base class for binary climate mode remote values."""
 
     @abstractmethod
-    def supported_operation_modes(
-        self,
-    ) -> list[HVACModeT]:
+    def supported_operation_modes(self) -> list[HVACOperationMode]:
         """Return a list of all supported operation modes."""
 
+    @abstractmethod
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
 
-class RemoteValueOperationMode(RemoteValueClimateModeBase[DPTArray, HVACOperationMode]):
+    @abstractmethod
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
+
+    @abstractmethod
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+
+
+class RemoteValueOperationMode(RemoteValueClimateModeBase[HVACOperationMode]):
     """Abstraction for remote value of KNX climate operation modes."""
 
-    class ClimateModeType(Enum):
-        """Implemented climate mode types."""
-
-        CONTROLLER_STATUS = DPTControllerStatus
-        HVAC_MODE = DPTHVACMode
+    dpt_class = DPTHVACMode
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Climate mode",
-        climate_mode_type: ClimateModeType | None = None,
-        after_update_cb: AsyncCallbackType | None = None,
-    ):
+        after_update_cb: RVCallbackType[HVACOperationMode] | None = None,
+    ) -> None:
         """Initialize remote value of KNX climate mode."""
         super().__init__(
             xknx,
@@ -70,51 +84,41 @@ class RemoteValueOperationMode(RemoteValueClimateModeBase[DPTArray, HVACOperatio
             feature_name=feature_name,
             after_update_cb=after_update_cb,
         )
-        if not isinstance(climate_mode_type, self.ClimateModeType):
-            raise ConversionError(
-                "invalid climate mode type",
-                climate_mode_type=str(climate_mode_type),
-                device_name=str(device_name),
-                feature_name=feature_name,
-            )
-        self._climate_mode_transcoder: (
-            DPTControllerStatus | DPTHVACMode
-        ) = climate_mode_type.value
 
     def supported_operation_modes(self) -> list[HVACOperationMode]:
         """Return a list of all supported operation modes."""
-        return list(self._climate_mode_transcoder.SUPPORTED_MODES.values())
+        return self.dpt_class.get_valid_values()
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTArray:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTArray) and len(payload.value) == 1:
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
+        if mode not in self.supported_operation_modes():
+            return
+        super().set(mode)
 
-    def to_knx(self, value: Any) -> DPTArray:
-        """Convert value to payload."""
-        return DPTArray(self._climate_mode_transcoder.to_knx(value))
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
+        return []
 
-    def from_knx(self, payload: DPTArray) -> HVACOperationMode | None:
-        """Convert current payload to value."""
-        return self._climate_mode_transcoder.from_knx(payload.value)
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+        return
 
 
-class RemoteValueControllerMode(
-    RemoteValueClimateModeBase[DPTArray, HVACControllerMode]
-):
+class RemoteValueControllerMode(RemoteValueClimateModeBase[HVACControllerMode]):
     """Abstraction for remote value of KNX climate controller modes."""
+
+    dpt_class = DPTHVACContrMode
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Controller Mode",
-        after_update_cb: AsyncCallbackType | None = None,
-    ):
+        after_update_cb: RVCallbackType[HVACControllerMode] | None = None,
+    ) -> None:
         """Initialize remote value of KNX climate mode."""
         super().__init__(
             xknx,
@@ -126,52 +130,123 @@ class RemoteValueControllerMode(
             after_update_cb=after_update_cb,
         )
 
-    def supported_operation_modes(self) -> list[HVACControllerMode]:
+    def supported_operation_modes(self) -> list[HVACOperationMode]:
         """Return a list of all supported operation modes."""
-        return list(DPTHVACContrMode.SUPPORTED_MODES.values())
+        return []
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTArray:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTArray) and len(payload.value) == 1:
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
+        return
 
-    def to_knx(self, value: Any) -> DPTArray:
-        """Convert value to payload."""
-        return DPTArray(DPTHVACContrMode.to_knx(value))
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
+        return DPTHVACContrMode.get_valid_values()
 
-    def from_knx(self, payload: DPTArray) -> HVACControllerMode | None:
-        """Convert current payload to value."""
-        return DPTHVACContrMode.from_knx(payload.value)
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+        if mode not in self.supported_controller_modes():
+            return
+        super().set(mode)
+
+
+class RemoteValueHVACStatus(RemoteValueClimateModeBase[HVACStatus]):
+    """Abstraction for remote value of KNX climate HVAC status (Eberle status)."""
+
+    dpt_class = DPTHVACStatus
+
+    def __init__(
+        self,
+        xknx: XKNX,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
+        sync_state: bool | int | float | str = True,
+        device_name: str | None = None,
+        feature_name: str = "Controller status",
+        after_update_cb: RVCallbackType[HVACStatus] | None = None,
+    ) -> None:
+        """Initialize remote value of KNX climate controller status."""
+        super().__init__(
+            xknx,
+            group_address=group_address,
+            group_address_state=group_address_state,
+            sync_state=sync_state,
+            device_name=device_name,
+            feature_name=feature_name,
+            after_update_cb=after_update_cb,
+        )
+
+    def supported_operation_modes(self) -> list[HVACOperationMode]:
+        """Return a list of all supported operation modes."""
+        return [
+            HVACOperationMode.COMFORT,
+            HVACOperationMode.STANDBY,
+            HVACOperationMode.ECONOMY,
+            HVACOperationMode.BUILDING_PROTECTION,
+        ]
+
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
+        if mode not in self.supported_operation_modes():
+            return
+        if self._value is None:
+            raise ConversionError(
+                "HVACStatus value not initialized. Can not write new mode.",
+                device_name=self.device_name,
+            )
+        new_status = HVACStatus(
+            mode=mode,
+            dew_point=self._value.dew_point,
+            heat_cool=self._value.heat_cool,
+            inactive=self._value.inactive,
+            frost_alarm=self._value.frost_alarm,
+        )
+        return super().set(new_status)
+
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
+        return [HVACControllerMode.HEAT, HVACControllerMode.COOL]
+
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+        if mode not in self.supported_controller_modes():
+            return
+        if self._value is None:
+            raise ConversionError(
+                "HVACStatus value not initialized. Can not write new mode.",
+                device_name=self.device_name,
+            )
+        new_status = HVACStatus(
+            mode=self._value.mode,
+            dew_point=self._value.dew_point,
+            heat_cool=HeatCool.HEAT
+            if mode == HVACControllerMode.HEAT
+            else HeatCool.COOL,
+            inactive=self._value.inactive,
+            frost_alarm=self._value.frost_alarm,
+        )
+        super().set(new_status)
 
 
 class RemoteValueBinaryOperationMode(
-    RemoteValueClimateModeBase[DPTBinary, HVACOperationMode]
+    RemoteValueClimateModeBase[HVACOperationMode | None]
 ):
     """Abstraction for remote value of split up KNX climate modes."""
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Climate mode binary",
-        after_update_cb: AsyncCallbackType | None = None,
+        after_update_cb: RVCallbackType[HVACOperationMode | None] | None = None,
         operation_mode: HVACOperationMode | None = None,
-    ):
+    ) -> None:
         """Initialize remote value of KNX DPT 1 representing a climate operation mode."""
         if not isinstance(operation_mode, HVACOperationMode):
             raise ConversionError(
                 "Invalid operation mode type",
-                operation_mode=str(operation_mode),
-                device_name=str(device_name),
-                feature_name=feature_name,
-            )
-        if operation_mode not in self.supported_operation_modes():
-            raise ConversionError(
-                "Operation mode not supported for binary mode object",
                 operation_mode=str(operation_mode),
                 device_name=str(device_name),
                 feature_name=feature_name,
@@ -187,13 +262,28 @@ class RemoteValueBinaryOperationMode(
             after_update_cb=after_update_cb,
         )
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTBinary:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTBinary):
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
+    def supported_operation_modes(self) -> list[HVACOperationMode]:
+        """Return a list of all supported operation modes."""
+        # all binary operation modes off -> Standby according to MDT
+        return (
+            [self.operation_mode, HVACOperationMode.STANDBY]
+            if self.operation_mode is not HVACOperationMode.STANDBY
+            else [HVACOperationMode.STANDBY]
+        )
 
-    def to_knx(self, value: Any) -> DPTBinary:
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
+        super().set(mode)
+
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
+        return []
+
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+        return
+
+    def to_knx(self, value: HVACOperationMode | None) -> DPTBinary:
         """Convert value to payload."""
         if isinstance(value, HVACOperationMode):
             # foreign operation modes will set the RemoteValue to False
@@ -205,45 +295,34 @@ class RemoteValueBinaryOperationMode(
             feature_name=self.feature_name,
         )
 
-    def supported_operation_modes(self) -> list[HVACOperationMode]:
-        """Return a list of the configured operation mode."""
-        return [
-            HVACOperationMode.COMFORT,
-            HVACOperationMode.FROST_PROTECTION,
-            HVACOperationMode.NIGHT,
-            HVACOperationMode.STANDBY,
-        ]
-
-    def from_knx(self, payload: DPTPayloadT) -> HVACOperationMode | None:
+    def from_knx(self, payload: DPTArray | DPTBinary) -> HVACOperationMode | None:
         """Convert current payload to value."""
-        if payload == DPTBinary(1):
+        if payload.value == 1:
             return self.operation_mode
-        if payload == DPTBinary(0):
+        if payload.value == 0:
             return None
         raise CouldNotParseTelegram(
-            "payload invalid",
+            "Payload invalid",
             payload=str(payload),
             device_name=self.device_name,
             feature_name=self.feature_name,
         )
 
 
-class RemoteValueBinaryHeatCool(
-    RemoteValueClimateModeBase[DPTBinary, HVACControllerMode]
-):
+class RemoteValueBinaryHeatCool(RemoteValueClimateModeBase[HVACControllerMode]):
     """Abstraction for remote value of heat/cool controller mode."""
 
     def __init__(
         self,
         xknx: XKNX,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Controller mode Heat/Cool",
-        after_update_cb: AsyncCallbackType | None = None,
+        after_update_cb: RVCallbackType[HVACControllerMode] | None = None,
         controller_mode: HVACControllerMode | None = None,
-    ):
+    ) -> None:
         """Initialize remote value of KNX DPT 1 representing a climate controller mode."""
         if not isinstance(controller_mode, HVACControllerMode):
             raise ConversionError(
@@ -252,7 +331,7 @@ class RemoteValueBinaryHeatCool(
                 device_name=str(device_name),
                 feature_name=feature_name,
             )
-        if controller_mode not in self.supported_operation_modes():
+        if controller_mode not in self.supported_controller_modes():
             raise ConversionError(
                 "Controller mode not supported for binary mode object",
                 controller_mode=str(controller_mode),
@@ -270,15 +349,23 @@ class RemoteValueBinaryHeatCool(
             after_update_cb=after_update_cb,
         )
 
-    def payload_valid(self, payload: DPTArray | DPTBinary | None) -> DPTBinary:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTBinary):
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
+    def supported_operation_modes(self) -> list[HVACOperationMode]:
+        """Return a list of all supported operation modes."""
+        return []
 
-    def supported_operation_modes(self) -> list[HVACControllerMode]:
-        """Return a list of the configured operation mode."""
+    def set_operation_mode(self, mode: HVACOperationMode) -> None:
+        """Set operation mode. Return if not supported."""
+        return
+
+    def supported_controller_modes(self) -> list[HVACControllerMode]:
+        """Return a list of all supported controller modes."""
         return [HVACControllerMode.HEAT, HVACControllerMode.COOL]
+
+    def set_controller_mode(self, mode: HVACControllerMode) -> None:
+        """Set controller mode. Return if not supported."""
+        if mode not in self.supported_controller_modes():
+            return
+        super().set(mode)
 
     def to_knx(self, value: Any) -> DPTBinary:
         """Convert value to payload."""
@@ -292,22 +379,19 @@ class RemoteValueBinaryHeatCool(
             feature_name=self.feature_name,
         )
 
-    def from_knx(self, payload: DPTPayloadT) -> HVACControllerMode | None:
+    def from_knx(self, payload: DPTArray | DPTBinary) -> HVACControllerMode:
         """Convert current payload to value."""
-        if payload == DPTBinary(1):
+        if payload.value == 1:
             return self.controller_mode
-        if payload == DPTBinary(0):
+        if payload.value == 0:
             # return the other operation mode
             return next(
-                (
-                    _op
-                    for _op in self.supported_operation_modes()
-                    if _op is not self.controller_mode
-                ),
-                None,
+                _op
+                for _op in self.supported_controller_modes()
+                if _op is not self.controller_mode
             )
         raise CouldNotParseTelegram(
-            "payload invalid",
+            "Payload invalid",
             payload=str(payload),
             device_name=self.device_name,
             feature_name=self.feature_name,

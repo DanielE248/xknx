@@ -1,5 +1,6 @@
 """Unit test for RawValue objects."""
-from unittest.mock import AsyncMock
+
+from unittest.mock import Mock
 
 import pytest
 
@@ -51,10 +52,10 @@ class TestRawValue:
     )
     async def test_payloads(
         self,
-        payload_length,
-        raw_payload,
-        expected_state,
-    ):
+        payload_length: int,
+        raw_payload: DPTArray | DPTBinary,
+        expected_state: int,
+    ) -> None:
         """Test raw value types."""
         xknx = XKNX()
         raw_value = RawValue(
@@ -67,14 +68,14 @@ class TestRawValue:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(value=raw_payload),
         )
-        await raw_value.process(telegram)
+        raw_value.process(telegram)
         assert raw_value.resolve_state() == expected_state
         assert raw_value.last_telegram == telegram
 
     #
     # TEST RESPOND
     #
-    async def test_respond_to_read(self):
+    async def test_respond_to_read(self) -> None:
         """Test respond_to_read function."""
         xknx = XKNX()
         responding = RawValue(
@@ -108,11 +109,11 @@ class TestRawValue:
             destination_address=GroupAddress("1/1/1"), payload=GroupValueRead()
         )
         # verify no response when respond is False
-        await non_responding.process(read_telegram)
+        non_responding.process(read_telegram)
         assert xknx.telegrams.qsize() == 0
 
         # verify response when respond is True
-        await responding.process(read_telegram)
+        responding.process(read_telegram)
         assert xknx.telegrams.qsize() == 1
         response = xknx.telegrams.get_nowait()
         assert response == Telegram(
@@ -120,19 +121,19 @@ class TestRawValue:
             payload=GroupValueResponse(DPTArray((0x01, 0x00))),
         )
         # verify no response when GroupValueRead request is not for group_address
-        await responding_multiple.process(read_telegram)
+        responding_multiple.process(read_telegram)
         assert xknx.telegrams.qsize() == 1
         response = xknx.telegrams.get_nowait()
         assert response == Telegram(
             destination_address=GroupAddress("1/1/1"),
             payload=GroupValueResponse(DPTArray((0x01, 0x00))),
         )
-        await responding_multiple.process(
+        responding_multiple.process(
             Telegram(
                 destination_address=GroupAddress("2/2/2"), payload=GroupValueRead()
             )
         )
-        await responding_multiple.process(
+        responding_multiple.process(
             Telegram(
                 destination_address=GroupAddress("3/3/3"), payload=GroupValueRead()
             )
@@ -143,7 +144,7 @@ class TestRawValue:
     # TEST PROCESS CALLBACK
     #
 
-    async def test_process_callback(self):
+    async def test_process_callback(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if callback is called."""
 
         xknx = XKNX()
@@ -153,22 +154,22 @@ class TestRawValue:
             2,
             group_address="1/2/3",
         )
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         sensor.register_device_updated_cb(after_update_callback)
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x01, 0x02))),
         )
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_called_with(sensor)
         assert sensor.last_telegram == telegram
         # consecutive telegrams with same payload shall only trigger one callback
         after_update_callback.reset_mock()
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_not_called()
 
-    async def test_process_callback_always(self):
+    async def test_process_callback_always(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if callback is called."""
 
         xknx = XKNX()
@@ -179,25 +180,25 @@ class TestRawValue:
             group_address="1/2/3",
             always_callback=True,
         )
-        after_update_callback = AsyncMock()
+        after_update_callback = Mock()
         sensor.register_device_updated_cb(after_update_callback)
 
         telegram = Telegram(
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray((0x01, 0x02))),
         )
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_called_with(sensor)
         assert sensor.last_telegram == telegram
         # every telegram shall trigger callback
         after_update_callback.reset_mock()
-        await sensor.process(telegram)
+        sensor.process(telegram)
         after_update_callback.assert_called_with(sensor)
 
     #
     # TEST SET
     #
-    async def test_set_0(self):
+    async def test_set_0(self) -> None:
         """Test set with raw value."""
         xknx = XKNX()
         raw_value = RawValue(xknx, "TestSensor", 0, group_address="1/2/3")
@@ -210,7 +211,7 @@ class TestRawValue:
             payload=GroupValueWrite(DPTBinary(True)),
         )
 
-    async def test_set_1(self):
+    async def test_set_1(self) -> None:
         """Test set with raw value."""
         xknx = XKNX()
         raw_value = RawValue(xknx, "TestSensor", 1, group_address="1/2/3")
@@ -223,7 +224,7 @@ class TestRawValue:
             payload=GroupValueWrite(DPTArray((0x4B,))),
         )
 
-    def test_string(self):
+    def test_string(self) -> None:
         """Test RawValue string representation."""
 
         xknx = XKNX()

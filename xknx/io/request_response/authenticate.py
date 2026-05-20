@@ -1,4 +1,5 @@
 """Abstraction to send SessionAuthenticate and wait for SessionStatus."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -19,7 +20,7 @@ class Authenticate(RequestResponse):
         transport: KNXIPTransport,
         user_id: int,
         message_authentication_code: bytes,
-    ):
+    ) -> None:
         """Initialize Session class."""
         super().__init__(transport, SessionStatus, timeout_in_seconds=10)
         self.user_id = user_id

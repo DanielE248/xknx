@@ -1,7 +1,8 @@
 """Unit test for KNX/IP Tunnelling Request/Response."""
+
 from unittest.mock import patch
 
-from xknx.cemi import CEMIFrame
+from xknx.cemi import CEMIFrame, CEMILData, CEMIMessageCode
 from xknx.dpt import DPTArray
 from xknx.io.request_response import Tunnelling
 from xknx.io.transport import UDPTransport
@@ -20,15 +21,18 @@ from xknx.telegram.apci import GroupValueWrite
 class TestTunnelling:
     """Test class for xknx/io/Tunnelling objects."""
 
-    async def test_tunnelling(self):
+    async def test_tunnelling(self) -> None:
         """Test tunnelling from KNX bus."""
         data_endpoint = ("192.168.1.2", 4567)
         udp_transport = UDPTransport(("192.168.1.1", 0), ("192.168.1.2", 1234))
-        raw_cemi = CEMIFrame.init_from_telegram(
-            Telegram(
-                destination_address=GroupAddress("1/2/3"),
-                payload=GroupValueWrite(DPTArray((0x1, 0x2, 0x3))),
-            )
+        raw_cemi = CEMIFrame(
+            code=CEMIMessageCode.L_DATA_IND,
+            data=CEMILData.init_from_telegram(
+                Telegram(
+                    destination_address=GroupAddress("1/2/3"),
+                    payload=GroupValueWrite(DPTArray((0x1, 0x2, 0x3))),
+                )
+            ),
         ).to_knx()
         tunnelling_request = TunnellingRequest(
             communication_channel_id=23,
@@ -41,9 +45,10 @@ class TestTunnelling:
         assert tunnelling.awaited_response_class == TunnellingAck
 
         exp_knxipframe = KNXIPFrame.init_from_body(tunnelling_request)
-        with patch("xknx.io.transport.UDPTransport.send") as mock_udp_send, patch(
-            "xknx.io.transport.UDPTransport.getsockname"
-        ) as mock_udp_getsockname:
+        with (
+            patch("xknx.io.transport.UDPTransport.send") as mock_udp_send,
+            patch("xknx.io.transport.UDPTransport.getsockname") as mock_udp_getsockname,
+        ):
             mock_udp_getsockname.return_value = ("192.168.1.3", 4321)
             await tunnelling.start()
             mock_udp_send.assert_called_with(exp_knxipframe, addr=data_endpoint)

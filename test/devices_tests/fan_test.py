@@ -1,5 +1,6 @@
 """Unit test for Fan objects."""
-from unittest.mock import AsyncMock, patch
+
+from unittest.mock import Mock, patch
 
 from xknx import XKNX
 from xknx.devices import Fan
@@ -14,7 +15,7 @@ class TestFan:
     #
     # SYNC
     #
-    async def test_sync(self):
+    async def test_sync(self) -> None:
         """Test sync function / sending group reads to KNX bus."""
         xknx = XKNX()
         fan = Fan(xknx, name="TestFan", group_address_speed_state="1/2/3")
@@ -25,7 +26,7 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"), payload=GroupValueRead()
         )
 
-    async def test_sync_step(self):
+    async def test_sync_step(self) -> None:
         """Test sync function / sending group reads to KNX bus."""
         xknx = XKNX()
         fan = Fan(
@@ -43,7 +44,7 @@ class TestFan:
     #
     # SYNC WITH STATE ADDRESS
     #
-    async def test_sync_state_address(self):
+    async def test_sync_state_address(self) -> None:
         """Test sync function / sending group reads to KNX bus."""
         xknx = XKNX()
         fan = Fan(
@@ -62,7 +63,7 @@ class TestFan:
     #
     # TEST SWITCH ON/OFF
     #
-    async def test_switch_on_off(self):
+    async def test_switch_on_off(self) -> None:
         """Test switching on/off of a Fan."""
         xknx = XKNX()
         fan = Fan(xknx, name="TestFan", group_address_speed="1/2/3")
@@ -140,7 +141,7 @@ class TestFan:
     #
     # TEST SET SPEED
     #
-    async def test_set_speed(self):
+    async def test_set_speed(self) -> None:
         """Test setting the speed of a Fan."""
         xknx = XKNX()
         fan = Fan(xknx, name="TestFan", group_address_speed="1/2/3")
@@ -152,8 +153,8 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(140)),
         )
-        await fan.process(telegram)
-        assert fan.is_on == True
+        fan.process(telegram)
+        assert fan.is_on is True
 
         # A speed of 0 will turn off the fan implicitly if there is no
         # dedicated switch GA
@@ -165,8 +166,8 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(0)),
         )
-        await fan.process(telegram)
-        assert fan.is_on == False
+        fan.process(telegram)
+        assert fan.is_on is False
 
         fan_with_switch = Fan(
             xknx,
@@ -181,8 +182,8 @@ class TestFan:
             destination_address=GroupAddress("4/5/6"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        await fan_with_switch.process(telegram)
-        assert fan_with_switch.is_on == True
+        fan_with_switch.process(telegram)
+        assert fan_with_switch.is_on is True
 
         # A speed of 0 will not turn off the fan implicitly if there is a
         # dedicated switch GA defined. So we only expect a speed change telegram,
@@ -194,13 +195,13 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(0)),
         )
-        await fan_with_switch.process(telegram)
-        assert fan_with_switch.is_on == True
+        fan_with_switch.process(telegram)
+        assert fan_with_switch.is_on is True
 
     #
     # TEST SET SPEED STEP
     #
-    async def test_set_speed_step(self):
+    async def test_set_speed_step(self) -> None:
         """Test setting the speed of a Fan in step mode."""
 
         xknx = XKNX()
@@ -218,10 +219,27 @@ class TestFan:
             payload=GroupValueWrite(DPTArray(2)),
         )
 
+    async def test_set_speed_step_turn_on(self) -> None:
+        """Test turning on a fan in step mode."""
+        xknx = XKNX()
+        fan = Fan(
+            xknx,
+            name="TestFan",
+            group_address_speed="1/2/3",
+            max_step=5,
+        )
+        await fan.turn_on()
+        assert xknx.telegrams.qsize() == 1
+        telegram = xknx.telegrams.get_nowait()
+        assert telegram == Telegram(
+            destination_address=GroupAddress("1/2/3"),
+            payload=GroupValueWrite(DPTArray(3)),
+        )
+
     #
     # TEST SET OSCILLATION
     #
-    async def test_set_oscillation(self):
+    async def test_set_oscillation(self) -> None:
         """Test setting the oscillation of a Fan."""
         xknx = XKNX()
         fan = Fan(
@@ -241,7 +259,7 @@ class TestFan:
     #
     # TEST PROCESS SPEED
     #
-    async def test_process_speed(self):
+    async def test_process_speed(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if speed is processed."""
         xknx = XKNX()
         fan = Fan(xknx, name="TestFan", group_address_speed="1/2/3")
@@ -253,7 +271,7 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(140)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         # Setting a speed for a fan that has no dedicated switch GA,
         # should turn on the fan.
         assert fan.is_on is True
@@ -264,14 +282,14 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(0)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.is_on is False
         assert fan.current_speed == 0
 
-    async def test_process_speed_wrong_payload(self):
+    async def test_process_speed_wrong_payload(self) -> None:
         """Test process wrong telegrams. (wrong payload type)."""
         xknx = XKNX()
-        cb_mock = AsyncMock()
+        cb_mock = Mock()
         fan = Fan(
             xknx, name="TestFan", group_address_speed="1/2/3", device_updated_cb=cb_mock
         )
@@ -280,14 +298,14 @@ class TestFan:
             payload=GroupValueWrite(DPTBinary(1)),
         )
         with patch("logging.Logger.warning") as log_mock:
-            await fan.process(telegram)
+            fan.process(telegram)
             log_mock.assert_called_once()
             cb_mock.assert_not_called()
 
     #
     # TEST PROCESS SWITCH
     #
-    async def test_process_switch(self):
+    async def test_process_switch(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if switch is handled correctly."""
         xknx = XKNX()
         fan = Fan(
@@ -304,7 +322,7 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(140)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         # Setting a speed for a fan with dedicated switch GA,
         # should not turn on the fan
         assert fan.is_on is False
@@ -315,7 +333,7 @@ class TestFan:
             destination_address=GroupAddress("4/5/6"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.is_on is True
         assert fan.current_speed == 55
 
@@ -324,7 +342,7 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(0)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.is_on is True
         assert fan.current_speed == 0
 
@@ -334,7 +352,7 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(140)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.is_on is True
         assert fan.current_speed == 55
 
@@ -343,14 +361,14 @@ class TestFan:
             destination_address=GroupAddress("4/5/6"),
             payload=GroupValueWrite(DPTBinary(0)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.is_on is False
         assert fan.current_speed == 55
 
     #
     # TEST PROCESS OSCILLATION
     #
-    async def test_process_oscillation(self):
+    async def test_process_oscillation(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if oscillation is processed."""
         xknx = XKNX()
         fan = Fan(
@@ -365,13 +383,13 @@ class TestFan:
             destination_address=GroupAddress("1/2/5"),
             payload=GroupValueWrite(DPTBinary(1)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.current_oscillation
 
-    async def test_process_fan_payload_invalid_length(self):
+    async def test_process_fan_payload_invalid_length(self) -> None:
         """Test process wrong telegrams. (wrong payload length)."""
         xknx = XKNX()
-        cb_mock = AsyncMock()
+        cb_mock = Mock()
         fan = Fan(
             xknx, name="TestFan", group_address_speed="1/2/3", device_updated_cb=cb_mock
         )
@@ -380,14 +398,14 @@ class TestFan:
             payload=GroupValueWrite(DPTArray((23, 24))),
         )
         with patch("logging.Logger.warning") as log_mock:
-            await fan.process(telegram)
+            fan.process(telegram)
             log_mock.assert_called_once()
             cb_mock.assert_not_called()
 
     #
     # TEST PROCESS STEP MODE
     #
-    async def test_process_speed_step(self):
+    async def test_process_speed_step(self) -> None:
         """Test process / reading telegrams from telegram queue. Test if speed is processed."""
 
         xknx = XKNX()
@@ -403,10 +421,10 @@ class TestFan:
             destination_address=GroupAddress("1/2/3"),
             payload=GroupValueWrite(DPTArray(2)),
         )
-        await fan.process(telegram)
+        fan.process(telegram)
         assert fan.current_speed == 2
 
-    def test_has_group_address(self):
+    def test_has_group_address(self) -> None:
         """Test has_group_address."""
         xknx = XKNX()
         fan = Fan(

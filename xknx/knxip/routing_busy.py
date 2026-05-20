@@ -3,6 +3,7 @@ Module for Serialization and Deserialization of KNX RoutingBusy frames.
 
 RoutingBusy frames are used for flow control.
 """
+
 from __future__ import annotations
 
 from xknx.exceptions import CouldNotParseKNXIP
@@ -22,7 +23,7 @@ class RoutingBusy(KNXIPBody):
         device_state: int = 0,
         wait_time: int = 100,
         control_field: int = 0,
-    ):
+    ) -> None:
         """Initialize RoutingBusy object."""
         self.device_state = device_state
         self.wait_time = wait_time

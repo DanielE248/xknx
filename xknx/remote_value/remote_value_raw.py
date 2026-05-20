@@ -4,33 +4,34 @@ Module for managing a remote value typically used within a sensor.
 The module maps a given value_type to a DPT class and uses this class
 for serialization and deserialization of the KNX value.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 from xknx.dpt.dpt import DPTArray, DPTBinary
 from xknx.exceptions import ConversionError, CouldNotParseTelegram
 
-from .remote_value import AsyncCallbackType, GroupAddressesType, RemoteValue
+from .remote_value import GroupAddressesType, RemoteValue, RVCallbackType
 
 if TYPE_CHECKING:
     from xknx.xknx import XKNX
 
 
-class RemoteValueRaw(RemoteValue[Union[DPTArray, DPTBinary], int]):
+class RemoteValueRaw(RemoteValue[int]):
     """Abstraction for raw values."""
 
     def __init__(
         self,
         xknx: XKNX,
         payload_length: int,
-        group_address: GroupAddressesType | None = None,
-        group_address_state: GroupAddressesType | None = None,
+        group_address: GroupAddressesType = None,
+        group_address_state: GroupAddressesType = None,
         sync_state: bool | int | float | str = True,
         device_name: str | None = None,
         feature_name: str = "Raw",
-        after_update_cb: AsyncCallbackType | None = None,
-    ):
+        after_update_cb: RVCallbackType[int] | None = None,
+    ) -> None:
         """Initialize RemoteValueRaw class."""
         self.payload_length = payload_length
         super().__init__(
@@ -42,16 +43,6 @@ class RemoteValueRaw(RemoteValue[Union[DPTArray, DPTBinary], int]):
             feature_name=feature_name,
             after_update_cb=after_update_cb,
         )
-
-    def payload_valid(
-        self, payload: DPTArray | DPTBinary | None
-    ) -> DPTArray | DPTBinary:
-        """Test if telegram payload may be parsed."""
-        if isinstance(payload, DPTBinary) and self.payload_length == 0:
-            return payload
-        if isinstance(payload, DPTArray) and len(payload.value) == self.payload_length:
-            return payload
-        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
 
     def to_knx(self, value: int) -> DPTArray | DPTBinary:
         """Convert value to payload."""
@@ -69,9 +60,13 @@ class RemoteValueRaw(RemoteValue[Union[DPTArray, DPTBinary], int]):
 
     def from_knx(self, payload: DPTArray | DPTBinary) -> int:
         """Convert current payload to value."""
-        if isinstance(payload, DPTBinary):
+        if isinstance(payload, DPTBinary) and self.payload_length == 0:
             return payload.value
-        try:
-            return int.from_bytes(payload.value, byteorder="big")
-        except ValueError as err:
-            raise ConversionError("Could not parse payload", payload=payload) from err
+        if isinstance(payload, DPTArray) and len(payload.value) == self.payload_length:
+            try:
+                return int.from_bytes(payload.value, byteorder="big")
+            except ValueError as err:
+                raise ConversionError(
+                    "Could not parse payload", payload=payload
+                ) from err
+        raise CouldNotParseTelegram("Payload invalid", payload=str(payload))
