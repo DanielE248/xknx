@@ -21,6 +21,7 @@ dependencies = [
   "typing_extensions; python_version<'3.11'",
   "cryptography>=35.0.0",
   "ifaddr>=0.1.7",
+  "pyusb>=1.2.1",
 ]
 description = "An Asynchronous Library for the KNX protocol. Documentation: https://xknx.io/"
 dynamic = ["version"]
